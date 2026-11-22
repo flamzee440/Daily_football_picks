@@ -14,11 +14,11 @@ Publish directory: `dist`
 ## 2. Add function environment variables
 In **Project configuration → Environment variables**, add these three variables with scope **Functions** (or All scopes):
 
-- `OPENAI_API_KEY`: your OpenAI API key from the OpenAI API platform. Keep it secret; do not put it in source code or the public website.
+- `GROQ_API_KEY`: your free Groq API key from https://console.groq.com/keys. Keep it secret; do not put it in source code or the public website. Stay on Groq's Free tier; do not add a payment method or upgrade.
 - `ADMIN_KEY`: create a long, random secret. This protects the admin dashboard and workflow endpoints.
 - `SESSION_SECRET`: create a different long, random secret used to sign member login sessions.
 
-Do not reuse your OpenAI key as either of the other secrets.
+Do not reuse your Groq key as either of the other secrets. The app uses Groq's OpenAI-compatible Responses API and the `openai/gpt-oss-120b` model. The research request uses Groq's built-in browser search; the decision request independently scores the candidate list.
 
 ## 3. Deploy and verify
 Trigger a production deploy from `main`. The database migration in `netlify/database/migrations` creates the member, prompt and daily-picks tables when Netlify Database is available for the account.
@@ -30,7 +30,13 @@ After deploy, check:
 - Run the workflow once. The normal path makes two OpenAI Responses API requests: one GPT-6.2 Astra request with the built-in web search tool to research and return candidates, followed by one GPT-6.2 Astra request to score all candidates together. The application filters and assembles the final slip locally, with no third model request.
 - The scheduled workflow runs at 11:00 UTC daily (6:00 AM New York during EST; 7:00 AM during EDT).
 
-## Workflow request limits\n- The normal workflow path makes one Gemini 3.8 Flash request and one Gemini Decision 1 request (two model requests total).\n- Gemini Decision 1 scores all returned candidates in one call; it does not make a separate call per match.\n- Search grounding may retrieve multiple web sources inside the single Flash request; these are not separate Gemini model requests.\n- The workflow does not automatically retry failed model calls. A failed run returns an error and must be started again manually.\n- The app assembles the final slip and calculates combined decimal odds in code. It does not use a third model call.\n\n## Important limitations in this first release
+## Workflow request limits
+- The normal workflow makes two Groq model requests: one browser-search research request and one independent decision request.
+- Browser search is built into Groq's Responses API for the GPT-OSS models; it does not require a separate search API key.
+- The application assembles the final slip and calculates combined decimal odds in code. It does not use a third model call.
+- Groq's Free tier has rate and token limits. If the account reaches a limit, the run may fail until the limit resets. Do not upgrade or add a payment method if you want to keep the app fully free.
+
+## Important limitations in this first release
 - Member accounts use email/password sessions; email verification and password reset are not yet included.
-- The daily job is scheduled, but the first published deploy and a successful end-to-end Gemini test are required before it can run.
+- The daily job is scheduled, but the first published deploy and a successful end-to-end Groq test are required before it can run.
 - This is an informational predictions site, not a guarantee of outcomes or a betting/payment service.
