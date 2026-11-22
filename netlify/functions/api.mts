@@ -36,26 +36,26 @@ function clearCookie() {
   return `${COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
 }
 async function body(req:Request) { return await req.json().catch(()=>({})); }
-async function groqResponse(input:string, useBrowserSearch:boolean) {
-  const key=secret("GROQ_API_KEY");
+async function openAIResponse(input:string, useBrowserSearch:boolean) {
+  const key=secret("OPENAI_API_KEY");
   const payload:any={
-    model:"openai/gpt-oss-120b",
+    model:"gpt-5.4-mini",
     input,
     reasoning:{effort:"low"}
   };
   if(useBrowserSearch) {
-    payload.tools=[{type:"browser_search"}];
+    payload.tools=[{type:"web_search"}];
     payload.tool_choice="required";
   }
-  const response=await fetch("https://api.groq.com/openai/v1/responses",{
+  const response=await fetch("https://api.openai.com/v1/responses",{
     method:"POST",
     headers:{"content-type":"application/json","authorization":`Bearer ${key}`},
     body:JSON.stringify(payload)
   });
   const data=await response.json();
   if(!response.ok) {
-    const detail=data?.error?.message || `Groq request failed (${response.status})`;
-    throw new Error(`Groq ${useBrowserSearch?"research":"decision"} stage: ${detail}`);
+    const detail=data?.error?.message || `OpenAI request failed (${response.status})`;
+    throw new Error(`OpenAI ${useBrowserSearch?"research":"decision"} stage: ${detail}`);
   }
   const outputText=Array.isArray(data?.output)
     ? data.output.filter((item:any)=>item?.type==="message")
@@ -64,29 +64,29 @@ async function groqResponse(input:string, useBrowserSearch:boolean) {
         .map((item:any)=>item.text||"").join("\n")
     : "";
   const text=outputText || data?.output_text || "";
-  if(!text) throw new Error("Groq returned an empty response.");
+  if(!text) throw new Error("OpenAI returned an empty response.");
   return text;
 }
 function parseModelJson(text:string, stage:string) {
   const cleaned=text.replace(/^```json\s*/i,"").replace(/\s*```$/,"").trim();
   const first=cleaned.indexOf("{");
   const last=cleaned.lastIndexOf("}");
-  if(first<0||last<=first) throw new Error(`Groq ${stage} stage returned no valid JSON object.`);
+  if(first<0||last<=first) throw new Error(`OpenAI ${stage} stage returned no valid JSON object.`);
   try { return JSON.parse(cleaned.slice(first,last+1)); }
-  catch { throw new Error(`Groq ${stage} stage returned invalid JSON. Please run the workflow again.`); }
+  catch { throw new Error(`OpenAI ${stage} stage returned invalid JSON. Please run the workflow again.`); }
 }
-async function runGroqResearch(prompt:string, input:string) {
+async function runOpenAIResearch(prompt:string, input:string) {
   const instructions=prompt+"\n\nIMPORTANT OUTPUT RULE: Return only one valid JSON object matching the requested schema. Do not wrap it in Markdown fences. Use browser search to verify current fixtures, team news, referees, statistics and odds. Cite actual source URLs in the JSON.";
-  const text=await groqResponse(instructions+"\n\nINPUT DATA:\n"+input,true);
+  const text=await openAIResponse(instructions+"\n\nINPUT DATA:\n"+input,true);
   return parseModelJson(text,"research");
 }
-async function runGroqDecision(input:string) {
+async function runOpenAIDecision(input:string) {
   const instructions=`You are the independent final risk reviewer for a football-picks workflow. Evaluate EVERY candidate in the supplied input. Do not conduct new fixture research and do not assume missing facts are true. Score evidence quality and conservative accumulator suitability. Reject stale or unverified odds, weak evidence, unclear fixtures, major lineup uncertainty, volatile markets, and unsupported probability claims. Do not select based on odds alone. Return one result for each candidate, preserving its zero-based index. Use conservative estimates. A score of 3 or 4 requires strong current evidence. Safety probability means your estimated probability that the selection itself wins, not a guarantee. Confidence measures how well the evidence supports your assessment.
 Return valid JSON only in this shape: { "reviews": [ { "index": 0, "score": 0, "confidence": 0.0, "safety_probability": 0.0, "safety_confidence": 0.0, "reason": "short explanation" } ] }
 Score must be 0 to 4. All probability/confidence values must be between 0 and 1. Include every candidate exactly once.`;
-  const text=await groqResponse(instructions+"\n\nCANDIDATES TO REVIEW:\n"+input,false);
+  const text=await openAIResponse(instructions+"\n\nCANDIDATES TO REVIEW:\n"+input,false);
   const parsed=parseModelJson(text,"decision");
-  if(!Array.isArray(parsed?.reviews)) throw new Error("Groq decision stage returned no candidate reviews.");
+  if(!Array.isArray(parsed?.reviews)) throw new Error("OpenAI decision stage returned no candidate reviews.");
   return parsed.reviews as any[];
 }
 function nigeriaToday() {
@@ -125,7 +125,7 @@ function buildSlip(candidates:any[], answers:any[], date:string): Record<string,
     confidence_note:"No combination met the strict evidence and risk thresholds while reaching the 2.00–2.30 target. No bet is recommended.",
     research_notes:["The system did not force weak selections to reach the odds target."],
     recommendation:"NO BET",
-    decision_summary:{candidates_received:candidates.length,candidates_accepted:scored.length,model:"openai/gpt-oss-120b"}
+    decision_summary:{candidates_received:candidates.length,candidates_accepted:scored.length,model:"gpt-5.4-mini"}
   };
   const selections=best.map(x=>({
     match:x.candidate.match,
@@ -144,9 +144,9 @@ function buildSlip(candidates:any[], answers:any[], date:string): Record<string,
   return {
     date,title:"Daily Football Picks",selections,combined_odds:Number(combined.toFixed(2)),
     confidence_note:"Selections passed the configured evidence and risk filters. No betting outcome is guaranteed; confirm odds and lineups before placing any bet.",
-    research_notes:["Research and candidate generation: one Groq Responses API request with web search.","Independent candidate scoring: one Groq Responses API request.","Final slip assembly and combined-odds calculation: application code."],
+    research_notes:["Research and candidate generation: one OpenAI Responses API request with web search.","Independent candidate scoring: one OpenAI Responses API request.","Final slip assembly and combined-odds calculation: application code."],
     recommendation:"BET WITH CAUTION",
-    decision_summary:{candidates_received:candidates.length,candidates_accepted:scored.length,selected:selections.length,model:"openai/gpt-oss-120b"}
+    decision_summary:{candidates_received:candidates.length,candidates_accepted:scored.length,selected:selections.length,model:"gpt-5.4-mini"}
   };
 }
 
@@ -207,22 +207,22 @@ export default async (req:Request) => {
         const rows=await db.sql<{prompt_key:string,prompt_text:string}>`SELECT prompt_key,prompt_text FROM prompts WHERE prompt_key='master' LIMIT 1`;
         const master=rows[0]?.prompt_text || defaults.master;
         const date=nigeriaToday();
-        console.info("[daily-football-picks] Groq research request started");
-        const research=await runGroqResearch(master.replaceAll("{{NIGERIA_DATE}}",date),`Today's date in Nigeria (Africa/Lagos): ${date}. Research today's fixtures and return the required candidate JSON.`);
+        console.info("[daily-football-picks] OpenAI research request started");
+        const research=await runOpenAIResearch(master.replaceAll("{{NIGERIA_DATE}}",date),`Today's date in Nigeria (Africa/Lagos): ${date}. Research today's fixtures and return the required candidate JSON.`);
         const candidates=Array.isArray(research?.candidates)?research.candidates.slice(0,40):[];
         if(!candidates.length) {
           const noBet={date,title:"Daily Football Picks",selections:[],combined_odds:null,confidence_note:"No credible candidate selections were returned by the research stage. No bet is recommended.",recommendation:"NO BET",research_notes:research?.research_limitations||[]};
           await db.sql`INSERT INTO daily_picks(pick_date,payload,status) VALUES (${date},${JSON.stringify(noBet)}::jsonb,'published') ON CONFLICT(pick_date) DO UPDATE SET payload=EXCLUDED.payload,status='published',created_at=NOW()`;
-          return json({ok:true,pick:noBet,model_requests:1,request_breakdown:{groq_research:1,groq_decision:0}});
+          return json({ok:true,pick:noBet,model_requests:1,request_breakdown:{openai_research:1,openai_decision:0}});
         }
-        console.info("[daily-football-picks] Groq decision request started", {candidate_count:candidates.length});
-        const answers=await runGroqDecision(JSON.stringify({date,research_summary:research.research_summary,candidates}));
+        console.info("[daily-football-picks] OpenAI decision request started", {candidate_count:candidates.length});
+        const answers=await runOpenAIDecision(JSON.stringify({date,research_summary:research.research_summary,candidates}));
         const final=buildSlip(candidates,answers,date);
         final.research_summary=research.research_summary||"";
         final.research_limitations=research.research_limitations||[];
         await db.sql`INSERT INTO daily_picks(pick_date,payload,status) VALUES (${date},${JSON.stringify(final)}::jsonb,'published') ON CONFLICT(pick_date) DO UPDATE SET payload=EXCLUDED.payload,status='published',created_at=NOW()`;
-        console.info("[daily-football-picks] Groq workflow completed: 2 model requests maximum");
-        return json({ok:true,pick:final,model_requests:2,request_breakdown:{groq_research:1,groq_decision:1}});
+        console.info("[daily-football-picks] OpenAI workflow completed: 2 model requests maximum");
+        return json({ok:true,pick:final,model_requests:2,request_breakdown:{openai_research:1,openai_decision:1}});
       }
     }
     return json({error:"Not found."},404);
