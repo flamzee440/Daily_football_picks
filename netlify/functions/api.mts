@@ -1,29 +1,82 @@
+import { getStore } from "@netlify/blobs";
 import type { Config } from "@netlify/functions";
-import { getDatabase } from "@netlify/database";
-const db=getDatabase();
-const json=(v:unknown,s=200)=>Response.json(v,{status:s});
-const allowed=(r:Request)=>!!Netlify.env.get("ADMIN_KEY")&&r.headers.get("x-admin-key")===Netlify.env.get("ADMIN_KEY");
-const today=()=>new Intl.DateTimeFormat("en-CA",{timeZone:"Africa/Lagos",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
-async function football(path:string){const key=Netlify.env.get("API_FOOTBALL_KEY");if(!key)throw new Error("API_FOOTBALL_KEY is missing.");const r=await fetch("https://v3.football.api-sports.io/"+path,{headers:{"x-apisports-key":key},signal:AbortSignal.timeout(30000)});const d:any=await r.json().catch(()=>({}));if(!r.ok||Object.keys(d.errors||{}).length)throw new Error("API-Football error: "+JSON.stringify(d.errors||r.status));return d;}
-async function fetchData(){
- const date=today(),fr=await football("fixtures?date="+date+"&timezone=Africa%2FLagos");
- const fixtures=(fr.response||[]).filter((x:any)=>x.fixture?.timestamp>Date.now()/1000&&["NS","TBD"].includes(x.fixture?.status?.short));
- const ids=new Set(fixtures.map((x:any)=>Number(x.fixture.id))),odds:any[]=[];
- if(fixtures.length){const first=await football("odds?date="+date+"&page=1"),pages=Math.min(10,Math.max(1,Number(first.paging?.total||1))),all=[first];for(let p=2;p<=pages;p++)all.push(await football("odds?date="+date+"&page="+p));for(const page of all)for(const event of page.response||[]){const id=Number(event.fixture?.id);if(!ids.has(id))continue;const f:any=fixtures.find((x:any)=>Number(x.fixture.id)===id);for(const b of event.bookmakers||[])for(const m of b.bets||[])for(const v of m.values||[]){const price=Number(v.odd);if(price>1)odds.push({fixture_id:id,match:f.teams.home.name+" vs "+f.teams.away.name,competition:f.league.name,kickoff_wat:new Date(f.fixture.date).toLocaleString("en-GB",{timeZone:"Africa/Lagos"}),bookmaker:b.name,market:m.name,selection:v.value,handicap:v.handicap||"",odds:price});}}}
- const stats=await Promise.all(fixtures.slice(0,20).map(async(x:any)=>{try{const d=await football("predictions?fixture="+x.fixture.id),v=d.response?.[0];return v?{fixture_id:x.fixture.id,predictions:v.predictions,teams:v.teams,comparison:v.comparison,h2h:(v.h2h||[]).slice(0,5)}:null}catch{return {fixture_id:x.fixture.id,unavailable:true}}}));
- const data={date,timezone:"Africa/Lagos (WAT)",provider:"API-Football",fetched_at:new Date().toISOString(),fixtures:fixtures.map((x:any)=>({fixture_id:x.fixture.id,match:x.teams.home.name+" vs "+x.teams.away.name,home_team:x.teams.home.name,away_team:x.teams.away.name,competition:x.league.name,kickoff_wat:new Date(x.fixture.date).toLocaleString("en-GB",{timeZone:"Africa/Lagos"}),kickoff:x.fixture.date,venue:x.fixture.venue?.name||""})),odds_records:odds,match_statistics:stats.filter(Boolean),summary:{fixtures:fixtures.length,odds_records:odds.length,markets:new Set(odds.map(x=>x.market)).size},note:"Upcoming Nigeria-local fixtures and bookmaker markets returned by API-Football. Pre-match predictions are not live match statistics."};
- await db.sql\`INSERT INTO prompts(prompt_key,prompt_text,updated_at) VALUES (\${"manual_football_data"},\${JSON.stringify(data)},NOW()) ON CONFLICT(prompt_key) DO UPDATE SET prompt_text=EXCLUDED.prompt_text,updated_at=NOW()\`;return data;
-}
-function parseSelections(input:any){let v=input.content??input.selections??input;if(typeof v==="string")v=JSON.parse(v.trim().replace(/^\u0060{3}(?:json)?\s*/i,"").replace(/\s*\u0060{3}$/,""));const rows=Array.isArray(v)?v:v?.selections||v?.picks||v?.matches;if(!Array.isArray(rows)||!rows.length)throw new Error("Paste JSON containing a non-empty selections array.");if(rows.length>30)throw new Error("Maximum 30 selections per publication.");return rows.map((x:any,i:number)=>{const match=String(x.match||x.fixture||"").trim(),market=String(x.market||x.market_name||"").trim(),selection=String(x.selection||x.prediction||x.pick||"").trim(),odds=Number(x.odds??x.decimal_odds);if(!match||!market||!selection||!Number.isFinite(odds)||odds<=1)throw new Error("Selection "+(i+1)+" needs match, market, selection and odds above 1.");return {match,competition:String(x.competition||x.league||"Football"),kickoff:String(x.kickoff_wat||x.kickoff||""),market,selection,odds:Number(odds.toFixed(2)),bookmaker:String(x.bookmaker||""),reason:String(x.reason||x.analysis||"")};});}
-export default async(req:Request)=>{const path=new URL(req.url).pathname.replace(/^\/(?:api|\.netlify\/functions\/api)\/?/,"").replace(/\/$/,"");try{
- if(path==="health"&&req.method==="GET")return json({ok:true});
- if(path==="picks"&&req.method==="GET"){const rows=await db.sql\`SELECT payload FROM daily_picks WHERE status='published' ORDER BY created_at DESC LIMIT 30\`;return json({picks:rows.map((x:any)=>x.payload)});}
- if(!path.startsWith("admin/"))return json({error:"Not found."},404);if(!allowed(req))return json({error:"Admin key is incorrect or missing."},401);
- if(path==="admin/auth"&&req.method==="POST")return json({ok:true});
- if(path==="admin/fetch-data"&&req.method==="POST")return json({ok:true,data:await fetchData()});
- if(path==="admin/data"&&req.method==="GET"){const rows=await db.sql\`SELECT prompt_text FROM prompts WHERE prompt_key='manual_football_data' LIMIT 1\`;return json({data:rows[0]?.prompt_text?JSON.parse(rows[0].prompt_text):null});}
- if(path==="admin/publish"&&req.method==="POST"){const input:any=await req.json(),selections=parseSelections(input),combined=Number(selections.reduce((n:number,x:any)=>n*x.odds,1).toFixed(2));const pick={date:today(),title:String(input.title||"Today's Football Picks"),published_at:new Date().toISOString(),timezone:"Africa/Lagos",selections,combined_odds:combined,confidence_note:String(input.confidence_note||input.summary||""),source:"Admin-published external analysis"};await db.sql\`INSERT INTO daily_picks(pick_date,payload,status) VALUES (\${pick.date},\${JSON.stringify(pick)}::jsonb,'published') ON CONFLICT(pick_date) DO UPDATE SET payload=EXCLUDED.payload,status='published',created_at=NOW()\`;return json({ok:true,pick});}
- if(path==="admin/chat"&&req.method==="POST"){const input:any=await req.json(),messages=Array.isArray(input.messages)?input.messages.slice(-16):[];if(!messages.length)return json({error:"Enter a message first."},400);const r=await fetch("https://ai-gateway.kilo.ai/api/v1/chat/completions",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({model:"kilo-auto/free",messages:[{role:"system",content:"You are the Daily Football Picks admin helper. Explain the dashboard, API-Football data, odds and markets. Never invent live match facts."},...messages.map((m:any)=>({role:m.role==="assistant"?"assistant":"user",content:String(m.content||"").slice(0,5000)}))]}),signal:AbortSignal.timeout(40000)});const d:any=await r.json().catch(()=>({}));if(!r.ok)return json({error:d.error?.message||"Kilo chat failed ("+r.status+")."},502);const reply=d.choices?.[0]?.message?.content;if(!reply)return json({error:"Kilo returned an empty response."},502);return json({ok:true,reply:String(reply)});}
- return json({error:"Not found."},404);
-}catch(e){console.error("[daily-football-picks]",e);return json({error:e instanceof Error?e.message:"Unexpected server error."},500);}};
-export const config:Config={path:"/api/*"};
+
+const store = () => getStore({ name: "daily-football-picks-data", consistency: "strong" });
+const json = (data: unknown, status = 200) => Response.json(data, { status });
+const admin = (req: Request) => {
+  const expected = Netlify.env.get("ADMIN_KEY");
+  return !!expected && req.headers.get("x-admin-key") === expected;
+};
+const read = async (key: string, fallback: any) => (await store().get(key, { type: "json" })) ?? fallback;
+const write = async (key: string, value: unknown) => store().setJSON(key, value);
+
+export default async (req: Request) => {
+  try {
+    const url = new URL(req.url);
+    const path = url.pathname.replace(/^\/api\/?/, "");
+    if (req.method === "GET" && path === "picks") {
+      return json({ picks: await read("published-picks", []) });
+    }
+    if (req.method === "POST" && path === "admin/auth") {
+      return admin(req) ? json({ ok: true }) : json({ error: "Invalid administrator key." }, 401);
+    }
+    if (!path.startsWith("admin/") || !admin(req)) return json({ error: "Administrator access required." }, 401);
+
+    if (req.method === "POST" && path === "admin/fetch-data") {
+      const key = Netlify.env.get("API_FOOTBALL_KEY");
+      if (!key) return json({ error: "API_FOOTBALL_KEY is not configured in this Netlify project yet." }, 503);
+      const now = new Date();
+      const date = new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Lagos", year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+      const response = await fetch(`https://v3.football.api-sports.io/fixtures?date=${date}`, { headers: { "x-apisports-key": key } });
+      if (!response.ok) return json({ error: `Football data provider returned HTTP ${response.status}.` }, 502);
+      const payload = await response.json();
+      if (payload.errors && Object.keys(payload.errors).length) return json({ error: JSON.stringify(payload.errors) }, 502);
+      const fixtures = (payload.response || []).map((item: any) => ({
+        fixtureId: item.fixture?.id, league: item.league?.name, country: item.league?.country,
+        kickoff: item.fixture?.date, status: item.fixture?.status?.short,
+        home: item.teams?.home?.name, away: item.teams?.away?.name,
+        venue: item.fixture?.venue?.name, referee: item.fixture?.referee,
+        goals: item.goals, score: item.score
+      }));
+      const dataset = { dateWAT: date, fetchedAt: now.toISOString(), count: fixtures.length, fixtures };
+      await write("latest-football-dataset", dataset);
+      return json(dataset);
+    }
+    if (req.method === "GET" && path === "admin/data") return json(await read("latest-football-dataset", { count: 0, fixtures: [] }));
+    if (req.method === "POST" && path === "admin/publish") {
+      const body = await req.json() as any;
+      const selections = body?.selections;
+      if (!Array.isArray(selections) || !selections.length || selections.length > 30) return json({ error: "Provide between 1 and 30 selections in a selections array." }, 400);
+      const valid = selections.map((p: any) => ({
+        id: crypto.randomUUID(), league: String(p.league || "Football"),
+        home: String(p.home || "").trim(), away: String(p.away || "").trim(),
+        market: String(p.market || "").trim(), selection: String(p.selection || "").trim(),
+        odds: Number(p.odds), kickoff: String(p.kickoff || ""),
+        publishedAt: new Date().toISOString()
+      }));
+      if (valid.some((p: any) => !p.home || !p.away || !p.market || !p.selection || !Number.isFinite(p.odds) || p.odds <= 1)) {
+        return json({ error: "Every pick needs home, away, market, selection and decimal odds greater than 1." }, 400);
+      }
+      const previous = await read("published-picks", []);
+      await write("published-picks", [...valid, ...previous].slice(0, 100));
+      return json({ ok: true, count: valid.length });
+    }
+    if (req.method === "POST" && path === "admin/chat") {
+      const endpoint = Netlify.env.get("KILO_API_URL");
+      const token = Netlify.env.get("KILO_API_KEY");
+      if (!endpoint || !token) return json({ error: "Kilo AI is not configured yet. Add KILO_API_URL and KILO_API_KEY in Netlify environment variables." }, 503);
+      const { message } = await req.json() as any;
+      if (!message || typeof message !== "string") return json({ error: "Enter a message." }, 400);
+      const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` }, body: JSON.stringify({ model: Netlify.env.get("KILO_MODEL") || "default", messages: [{ role: "user", content: message }] }) });
+      const result = await response.json() as any;
+      if (!response.ok) return json({ error: result?.error?.message || `Kilo provider returned HTTP ${response.status}.` }, 502);
+      return json({ reply: result?.choices?.[0]?.message?.content || result?.output_text || "No response text was returned." });
+    }
+    return json({ error: "API route not found." }, 404);
+  } catch (error) {
+    console.error("Daily Football Picks API error:", error);
+    return json({ error: error instanceof Error ? error.message : "Unexpected server error." }, 500);
+  }
+};
+
+export const config: Config = { path: "/api/*" };
