@@ -7,28 +7,30 @@ Build command: `npm run build`
 Publish directory: `dist`
 
 ## 2. Function environment variables
-In Netlify Project configuration → Environment variables, configure these with Functions scope (or All scopes):
+Keep these configured with Functions scope (or All scopes):
+- `ADMIN_KEY`: secret protecting the admin dashboard and workflow endpoints.
+- `SESSION_SECRET`: separate secret used to sign member login sessions.
 
-- `OPENAI_API_KEY`: your secret OpenAI API key. Keep it private; never put it in source code or the public website.
-- `ADMIN_KEY`: a long, random secret protecting the admin dashboard and workflow endpoints.
-- `SESSION_SECRET`: a different long, random secret used to sign member login sessions.
+The Kilo free gateway supports anonymous access for eligible free models, so this initial test does not require a Kilo API key. Never put credentials in source code.
 
-Do not reuse the OpenAI key as either of the other secrets.
+## 3. AI workflow — initial free-model test
+The workflow uses `kilo-auto/free` through Kilo's OpenAI-compatible Chat Completions API:
+1. One research-stage request asks the model for candidates.
+2. A separate decision-stage request independently scores returned candidates.
+3. Application code filters the scores and assembles the final slip locally.
 
-## 3. AI workflow
-The workflow uses `gpt-5.4-mini` through the OpenAI Responses API:
-1. One research request uses the hosted `web_search` tool to investigate current fixtures, team news, referees, statistics and odds, returning up to 40 candidates.
-2. A separate decision request independently scores every candidate.
-3. Application code filters the scores and assembles the final slip locally. No third model request is made.
-
-The research and decision requests are separate. A normal run therefore uses two model requests. Web search is an additional billable tool, and model tokens and search calls may incur charges depending on the account's actual billing/credit status. The dashboard's rate limits are request/token ceilings, not a statement that usage is free. Check API billing and usage before enabling scheduled runs.
+Important limitations:
+- The free chat endpoint does not itself provide a web-search tool. This first test is a model-connection and reasoning test, NOT verified live football research.
+- The model is explicitly instructed not to invent current facts or source URLs and to return no candidates when current information cannot be verified.
+- Free model routing and availability can change. Anonymous access is rate-limited by IP, and upstream providers may impose additional limits.
+- Free providers may log prompts and outputs; do not submit personal or confidential information.
 
 ## 4. Deploy and verify
 Trigger a production deploy from `main`. Then check:
 - `/api/health` returns `ok: true`.
 - Member signup and login work.
 - Admin access, prompt loading and saving work.
-- Run the workflow once and confirm both OpenAI requests succeed.
+- Run the workflow once and inspect the returned model and any limitations.
 
 The database migration in `netlify/database/migrations` creates the member, prompt and daily-picks tables when Netlify Database is available for the account.
 
