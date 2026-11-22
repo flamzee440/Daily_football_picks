@@ -40,20 +40,27 @@ function clearCookie() {
 async function body(req:Request) { return await req.json().catch(()=>({})); }
 async function runGemini(prompt:string, input:string) {
   const key=secret("GEMINI_API_KEY");
-  const response=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${encodeURIComponent(key)}`,{
+  const response=await fetch("https://generativelanguage.googleapis.com/v1beta/interactions",{
     method:"POST",
-    headers:{"content-type":"application/json"},
+    headers:{"content-type":"application/json","x-goog-api-key":key},
     body:JSON.stringify({
-      contents:[{role:"user",parts:[{text:prompt+"\n\nINPUT DATA:\n"+input}]}],
-      tools:[{google_search:{}}],
-      generationConfig:{temperature:0.25,responseMimeType:"application/json"}
+      model:"gemini-3.8-flash",
+      input:prompt+"\n\nINPUT DATA:\n"+input,
+      tools:[{type:"google_search"}],
+      response_format:{type:"text",mime_type:"application/json"}
     })
   });
   const data=await response.json();
   if(!response.ok) throw new Error(data?.error?.message || `Gemini request failed (${response.status})`);
-  const text=data?.candidates?.[0]?.content?.parts?.map((p:any)=>p.text||"").join("\n")||"";
+  const outputText=Array.isArray(data?.steps)
+    ? data.steps.filter((step:any)=>step?.type==="model_output")
+        .flatMap((step:any)=>Array.isArray(step?.content)?step.content:[])
+        .filter((item:any)=>item?.type==="text")
+        .map((item:any)=>item.text||"").join("\n")
+    : "";
+  const text=outputText || data?.output_text || "";
   if(!text) throw new Error("Gemini returned an empty response.");
-  const cleaned=text.replace(/^```json\s*/i,"").replace(/\s*```$/,"").trim();
+  const cleaned=text.replace(/^\`\`\`json\\s*/i,"").replace(/\\s*\`\`\`$/,"").trim();
   return JSON.parse(cleaned);
 }
 function adminAllowed(req:Request) {
