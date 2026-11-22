@@ -40,7 +40,7 @@ function clearCookie() {
 async function body(req:Request) { return await req.json().catch(()=>({})); }
 async function runGemini(prompt:string, input:string) {
   const key=secret("GEMINI_API_KEY");
-  const response=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(key)}`,{
+  const response=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${encodeURIComponent(key)}`,{
     method:"POST",
     headers:{"content-type":"application/json"},
     body:JSON.stringify({
