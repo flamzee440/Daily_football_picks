@@ -6,47 +6,11 @@ import { SignJWT, jwtVerify } from "jose";
 const db = getDatabase();
 const COOKIE = "dfp_session";
 const defaults: Record<string,string> = {
-  master: `# DAILY FOOTBALL PICKS — API-FOOTBALL DATA ANALYSIS
+  master: `# DAILY FOOTBALL PICKS — DECISION GUIDANCE
 
-You are the football analysis and prediction stage of this application. The application supplies real fixtures, bookmaker market prices and (when available) API-Football prediction summaries. Analyse ONLY the supplied data.
+API-Football is the exclusive source of fixtures, match information, bookmaker markets and decimal odds. Gemini Decision 1 evaluates only the supplied provider data.
 
-## Analysis rules
-- Use only fixtures and odds included in the supplied API-FOOTBALL DATA. Never invent a fixture, team, kickoff, market, bookmaker, price, injury, lineup, statistic, form record or source.
-- Consider the supplied API-Football prediction summary, team comparison, recent head-to-head summary and available market prices. Treat provider predictions as evidence to assess, not as guaranteed truth.
-- Compare the available markets and identify selections with a defensible risk/reward profile. Prefer stable markets and avoid speculative markets when evidence is thin.
-- Do not claim to know recent form, injuries, suspensions, lineups, weather or referee information unless those facts are explicitly present in the supplied data. List important missing information as a limitation.
-- A market selection and its decimal odds MUST be copied exactly from one supplied odds record. Include its fixture_id, bookmaker, market_name, selection and decimal_odds without alteration.
-- Do not estimate or fabricate bookmaker prices. Do not create a candidate if the supplied odds record is missing.
-- Never describe a bet as certain, fixed, safe or guaranteed. If the evidence is weak, return no candidates.
-
-## Combined odds objective
-The application seeks a small combination with total decimal odds between 2.00 and 2.30. Do not force a weak selection to reach the target. The application independently applies its risk filters and assembles the final slip.
-
-## Required JSON output
-Return JSON only:
-{
-  "date": "{{NIGERIA_DATE}}",
-  "research_summary": "Briefly describe the supplied fixtures, market coverage and main findings.",
-  "candidates": [
-    {
-      "fixture_id": 123,
-      "match": "Home Team vs Away Team",
-      "competition": "Competition",
-      "kickoff_nigeria_time": "ISO 8601 kickoff",
-      "bookmaker": "Exact bookmaker name from supplied data",
-      "market_name": "Exact market name from supplied data",
-      "selection": "Exact selection value from supplied data",
-      "market": "Exact market name",
-      "prediction": "Exact selection value",
-      "decimal_odds": 1.50,
-      "estimated_probability": 0.70,
-      "supporting_evidence": ["Evidence grounded in supplied data"],
-      "potential_risks": ["Relevant risks and missing information"]
-    }
-  ],
-  "research_limitations": ["Data not supplied or unavailable"]
-}
-Return an empty candidates array if there is no well-supported selection. Do not output Markdown fences.`
+Prioritize evidence quality, consistency between provider prediction summaries and team comparisons, market stability, and missing information. Do not assume injuries, lineups, form, weather or other facts absent from the supplied data. Never invent fixtures, prices, statistics or sources. Do not treat bookmaker odds as proof that a selection will win. Reject unsupported or highly volatile selections. The application independently verifies provider records and assembles the final slip. Never force a selection merely to reach the combined-odds target.`
 };
 
 function json(data: unknown, status=200, headers: Record<string,string>={}) {
@@ -76,116 +40,67 @@ function clearCookie() {
   return `${COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
 }
 async function body(req:Request) { return await req.json().catch(()=>({})); }
-async function geminiChatCompletion(messages:any[], stage:string) {
-  const key=Netlify.env.get("GEMINI_API_KEY");
-  if(!key) throw new Error("GEMINI_API_KEY is missing from Netlify environment variables.");
-  const model=Netlify.env.get("GEMINI_MODEL") || "gemini-2.5-flash";
-  const systemText=messages.filter((m:any)=>m.role==="system").map((m:any)=>String(m.content||"")).join("\n\n");
-  const contents=messages.filter((m:any)=>m.role!=="system").map((m:any)=>({
-    role:m.role==="assistant"?"model":"user",
-    parts:[{text:String(m.content||"")}]
-  }));
-  const response=await fetch("https://generativelanguage.googleapis.com/v1beta/models/"+encodeURIComponent(model)+":generateContent",{
-    method:"POST",
-    headers:{"content-type":"application/json","x-goog-api-key":key},
-    body:JSON.stringify({
-      ...(systemText?{systemInstruction:{parts:[{text:systemText}]}}:{}),
-      contents,
-      generationConfig:{temperature:0.2,maxOutputTokens:8192,responseMimeType:"application/json"}
-    }),
-    signal:AbortSignal.timeout(25000)
+async function geminiDecisionRequest(input:string,questions:Record<string,any>,stage:string) {
+  const key=secret("GEMINI_API_KEY");
+  const response=await fetch("https://generativelanguage.googleapis.com/v1beta/decisions",{
+    method:"POST",headers:{"content-type":"application/json","x-goog-api-key":key},
+    body:JSON.stringify({model:"gemini-decision-1",input,questions}),signal:AbortSignal.timeout(45000)
   });
   const data=await response.json().catch(()=>({}));
-  if(!response.ok) {
-    const detail=data?.error?.message || data?.message || `HTTP ${response.status}`;
-    throw new Error(`Gemini ${stage} stage failed: ${detail}`);
-  }
-  const text=(data?.candidates?.[0]?.content?.parts||[]).map((p:any)=>p?.text||"").join("").trim();
-  if(!text) throw new Error("Gemini returned an empty response"+(data?.promptFeedback?.blockReason?": "+data.promptFeedback.blockReason:"."));
-  return text;
+  if(!response.ok) throw new Error("Gemini Decision 1 "+stage+" failed: "+(data?.error?.message||data?.message||("HTTP "+response.status)));
+  if(!data?.answers||typeof data.answers!=="object")throw new Error("Gemini Decision 1 returned no typed answers.");
+  return data;
 }
-function parseModelJson(text:string, stage:string) {
-  const cleaned=text.replace(/^\`\`\`json\s*/i,"").replace(/\s*\`\`\`$/,"").trim();
-  const first=cleaned.indexOf("{"), last=cleaned.lastIndexOf("}");
-  if(first<0||last<=first) throw new Error(`Gemini ${stage} stage returned no valid JSON object.`);
-  try { return JSON.parse(cleaned.slice(first,last+1)); }
-  catch { throw new Error(`Gemini ${stage} stage returned invalid JSON. Please run the workflow again.`); }
-}
-async function runGeminiResearch(prompt:string, input:string) {
-  const instructions=prompt+"\n\nIMPORTANT OUTPUT RULE: Return only one valid JSON object matching the requested schema. Do not wrap it in Markdown fences. You are not browsing the web. The user message contains structured API-Football data. Only select exact fixture, bookmaker, market, selection and decimal_odds combinations present in that data. Never invent or adjust odds, fixtures, statistics, team news, injuries or source URLs. If evidence is insufficient, omit the candidate.";
-  const text=await geminiChatCompletion([{role:"system",content:instructions},{role:"user",content:"INPUT DATA:\n"+input}],"research");
-  return parseModelJson(text,"research");
-}
-async function runGeminiDecision(input:string) {
-  const instructions=`You are the independent final risk reviewer for a football-picks workflow. Evaluate EVERY candidate in the supplied input. Do not conduct new fixture research and do not assume missing facts are true. Score evidence quality and conservative accumulator suitability. Reject stale or unverified odds, weak evidence, unclear fixtures, major lineup uncertainty, volatile markets, and unsupported probability claims. Do not select based on odds alone. Return one result for each candidate, preserving its zero-based index. Use conservative estimates. A score of 3 or 4 requires strong current evidence. Safety probability means your estimated probability that the selection itself wins, not a guarantee. Confidence measures how well the evidence supports your assessment.
-Return valid JSON only in this shape: { "reviews": [ { "index": 0, "score": 0, "confidence": 0.0, "safety_probability": 0.0, "safety_confidence": 0.0, "reason": "short explanation" } ] }
-Score must be 0 to 4. All probability/confidence values must be between 0 and 1. Include every candidate exactly once.`;
-  const text=await geminiChatCompletion([{role:"system",content:instructions},{role:"user",content:"CANDIDATES TO REVIEW:\n"+input}],"decision");
-  const parsed=parseModelJson(text,"decision");
-  if(!Array.isArray(parsed?.reviews)) throw new Error("Gemini decision stage returned no candidate reviews.");
-  return parsed.reviews as any[];
+async function runGeminiCandidateScoring(master:string,inputData:any,candidates:any[]) {
+  const questions:Record<string,any>={};
+  candidates.forEach((candidate,index)=>{
+    questions["candidate_"+String(index).padStart(3,"0")]={
+      type:"score",
+      instructions:"Evaluate candidate "+index+" from the supplied CANDIDATES list for conservative football accumulator suitability. Use only the API-Football fixture, prediction, comparison and odds information supplied. Consider exact market type, evidence consistency, missing information and volatility. Do not infer unavailable team news or treat odds as a probability. Return a high rating only when the supplied evidence genuinely supports the selection.",
+      criteria:[
+        "0 — Reject: evidence is missing, contradictory, or the market is too volatile.",
+        "1 — Weak: little support or substantial uncertainty; do not include.",
+        "2 — Mixed: some support, but not strong enough for the published slip.",
+        "3 — Favorable: useful provider evidence supports the selection and major concerns are limited.",
+        "4 — Strong: multiple consistent provider indicators support the selection and the market is comparatively stable."
+      ]
+    };
+  });
+  const input=JSON.stringify({task:"Score each candidate independently. Do not create new candidates or return prose. All candidates are exact market and odds records from API-Football.",administrator_guidance:master,provider_data:inputData,candidates:candidates.map((c,index)=>({index,...c}))});
+  const result=await geminiDecisionRequest(input,questions,"candidate evaluation");
+  return candidates.map((candidate,index)=>{
+    const answer=result.answers["candidate_"+String(index).padStart(3,"0")];
+    if(!answer||answer.type!=="score")return {index,score:-1,confidence:0,safety_probability:0,safety_confidence:0};
+    const score=Number(answer.score),confidence=Number(answer.confidence);
+    return {index,score:Number.isFinite(score)?score:-1,confidence:Number.isFinite(confidence)?confidence:0,safety_probability:Number.isFinite(score)?Math.max(0,Math.min(1,score/4)):0,safety_confidence:Number.isFinite(confidence)?confidence:0};
+  });
 }
 function nigeriaToday() {
   const parts=new Intl.DateTimeFormat("en-GB", {timeZone:"Africa/Lagos",year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(new Date());
   const part=(type:string)=>parts.find(x=>x.type===type)?.value||"";
   return `${part("year")}-${part("month")}-${part("day")}`;
 }
-function buildSlip(candidates:any[], answers:any[], date:string): Record<string,any> {
+function buildSlip(candidates:any[],answers:any[],date:string): Record<string,any> {
   const scored=candidates.map((candidate,index)=>{
     const review=answers.find((item:any)=>Number(item?.index)===index);
-    const score=Number(review?.score ?? -1);
-    const scoreConfidence=Number(review?.confidence ?? 0);
-    const safeProbability=Number(review?.safety_probability ?? 0);
-    const safeConfidence=Number(review?.safety_confidence ?? 0);
-    const odds=Number(candidate.decimal_odds ?? candidate.odds);
-    return {candidate,index,score,scoreConfidence,safeProbability,safeConfidence,odds,review};
-  }).filter(x=>Number.isFinite(x.odds)&&x.odds>1&&x.score>=3.0&&x.scoreConfidence>=0.55&&x.safeProbability>=0.75&&x.safeConfidence>=0.60)
-    .sort((a,b)=>b.score-a.score || b.safeProbability-a.safeProbability);
-  const pool=scored.slice(0,24);
-  let best:any[]|null=null;
-  let bestQuality=-Infinity;
+    const score=Number(review?.score??-1),confidence=Number(review?.confidence??0),suitability=Number(review?.safety_probability??0),odds=Number(candidate.decimal_odds);
+    return {candidate,index,score,confidence,suitability,odds,review};
+  }).filter(x=>Number.isFinite(x.odds)&&x.odds>1&&x.score>=3&&x.confidence>=0.55&&x.suitability>=0.75).sort((a,b)=>b.score-a.score||b.confidence-a.confidence);
+  const pool=scored.slice(0,24);let best:any[]|null=null,bestQuality=-Infinity;
   const walk=(start:number,chosen:any[],product:number)=>{
-    if(chosen.length && product>=2.00 && product<=2.30) {
-      const avg=chosen.reduce((sum,x)=>sum+x.score*x.scoreConfidence*x.safeProbability,0)/chosen.length;
-      const riskPenalty=chosen.reduce((sum,x)=>sum+(1-x.safeProbability),0);
-      const quality=avg-riskPenalty*0.15-(chosen.length-1)*0.015;
-      if(quality>bestQuality){bestQuality=quality;best=[...chosen];}
-      return;
+    if(chosen.length&&product>=2&&product<=2.30){
+      const quality=chosen.reduce((sum,x)=>sum+x.score*x.confidence,0)/chosen.length-(chosen.length-1)*0.015;
+      if(quality>bestQuality){bestQuality=quality;best=[...chosen];}return;
     }
-    if(chosen.length>=4||product>2.30) return;
-    for(let i=start;i<pool.length;i++) walk(i+1,[...chosen,pool[i]],product*pool[i].odds);
+    if(chosen.length>=4||product>2.30)return;
+    for(let i=start;i<pool.length;i++)walk(i+1,[...chosen,pool[i]],product*pool[i].odds);
   };
   walk(0,[],1);
-  if(!best) return {
-    date,title:"Daily Football Picks",selections:[],combined_odds:null,
-    confidence_note:"No combination met the strict evidence and risk thresholds while reaching the 2.00–2.30 target. No bet is recommended.",
-    research_notes:["The system did not force weak selections to reach the odds target."],
-    recommendation:"NO BET",
-    decision_summary:{candidates_received:candidates.length,candidates_accepted:scored.length,model:"gemini-2.5-flash"}
-  };
-  const selections=best.map(x=>({
-    match:x.candidate.match,
-    competition:x.candidate.competition||"Football",
-    kickoff:x.candidate.kickoff_nigeria_time||x.candidate.kickoff||"",
-    market:x.candidate.market,
-    prediction:x.candidate.prediction||x.candidate.market,
-    odds:x.odds,
-    reason:[...(x.candidate.supporting_evidence||[]).slice(0,2),x.review?.reason].filter(Boolean).join(" "),
-    sources:x.candidate.sources||[],
-    decision_score:Number(x.score.toFixed(2)),
-    decision_confidence:Number(x.scoreConfidence.toFixed(3)),
-    safety_probability:Number(x.safeProbability.toFixed(3))
-  }));
+  if(!best)return {date,title:"Daily Football Picks",selections:[],combined_odds:null,confidence_note:"No combination met the Decision 1 evidence threshold and the 2.00–2.30 combined-odds target. No bet is recommended.",research_notes:["The app did not force weak selections to reach the odds target."],recommendation:"NO BET",decision_summary:{candidates_received:candidates.length,candidates_accepted:scored.length,model:"gemini-decision-1"}};
+  const selections=best.map(x=>({match:x.candidate.match,competition:x.candidate.competition||"Football",kickoff:x.candidate.kickoff_nigeria_time||"",market:x.candidate.market_name,prediction:x.candidate.selection,odds:x.odds,reason:"Gemini Decision 1 suitability score: "+x.score.toFixed(2)+"/4 (confidence "+x.confidence.toFixed(2)+"). Based only on supplied API-Football data; verify current odds and lineups.",sources:[{title:"API-Football fixture and bookmaker odds data",url:"https://www.api-football.com/"}],decision_score:Number(x.score.toFixed(2)),decision_confidence:Number(x.confidence.toFixed(3))}));
   const combined=best.reduce((p,x)=>p*x.odds,1);
-  return {
-    date,title:"Daily Football Picks",selections,combined_odds:Number(combined.toFixed(2)),
-    confidence_note:"Selections passed the configured evidence and risk filters. No betting outcome is guaranteed; confirm odds and lineups before placing any bet.",
-    research_notes:["Fixture and bookmaker odds data supplied by API-Football.","API-Football prediction enrichment supplied where available.","Gemini analysed only supplied provider data; unsupported selections were rejected by the application.","Independent candidate scoring: one Gemini API request.","Final slip assembly and combined-odds calculation: application code."],
-    recommendation:"BET WITH CAUTION",
-    decision_summary:{candidates_received:candidates.length,candidates_accepted:scored.length,selected:selections.length,model:"gemini-2.5-flash"}
-  };
+  return {date,title:"Daily Football Picks",selections,combined_odds:Number(combined.toFixed(2)),confidence_note:"Decision 1 suitability scores reflect supplied provider evidence, not guaranteed win probabilities. Confirm current odds and lineups before placing any bet.",research_notes:["Fixture, match and bookmaker odds data supplied by API-Football.","API-Football prediction enrichment included only where available.","Gemini Decision 1 evaluated the supplied candidates in one Decisions API request.","The app independently assembled the slip and calculated combined odds."],recommendation:"BET WITH CAUTION",decision_summary:{candidates_received:candidates.length,candidates_accepted:scored.length,selected:selections.length,model:"gemini-decision-1"}};
 }
-
 
 type ApiFootballEnvelope = { response?: any[]; errors?: any; results?: number; paging?: { total?: number } };
 async function apiFootballRequest(path:string) {
@@ -273,33 +188,6 @@ async function loadApiFootballData(date:string) {
     remaining:remainingValues.length?remainingValues[remainingValues.length-1]:null
   };
 }
-function validateApiCandidates(candidates:any[],data:any) {
-  const allowed=data.oddsRecords as any[];
-  const verified:any[]=[];
-  for(const candidate of candidates.slice(0,40)) {
-    const fixtureId=Number(candidate?.fixture_id);
-    const odds=Number(candidate?.decimal_odds);
-    const match=allowed.find(record =>
-      record.fixture_id===fixtureId &&
-      record.bookmaker===String(candidate?.bookmaker||"") &&
-      record.market_name===String(candidate?.market_name||candidate?.market||"") &&
-      record.selection===String(candidate?.selection||candidate?.prediction||"") &&
-      Math.abs(record.decimal_odds-odds)<0.0001
-    );
-    if(!match) continue;
-    verified.push({
-      ...match,
-      market:match.market_name,
-      prediction:match.selection,
-      estimated_probability:Number(candidate?.estimated_probability)||0,
-      supporting_evidence:Array.isArray(candidate?.supporting_evidence)?candidate.supporting_evidence.slice(0,4):[],
-      potential_risks:Array.isArray(candidate?.potential_risks)?candidate.potential_risks.slice(0,4):[],
-      sources:[{title:"API-Football fixture and bookmaker odds data",url:"https://www.api-football.com/"}]
-    });
-  }
-  return verified;
-}
-
 function adminAllowed(req:Request) {
   const expected=Netlify.env.get("ADMIN_KEY");
   return !!expected && req.headers.get("x-admin-key")===expected;
@@ -340,11 +228,11 @@ export default async (req:Request) => {
     if(path.startsWith("admin/")) {
       if(!adminAllowed(req)) return json({error:"Admin key required."},401);
       if(path==="admin/test-gemini" && req.method==="POST") {
-        const {question}=await body(req);
-        const prompt=String(question||"").trim();
-        if(!prompt||prompt.length>4000) return json({error:"Enter a test question of up to 4,000 characters."},400);
-        const answer=await geminiChatCompletion([{role:"user",content:prompt}],"connection test");
-        return json({ok:true,answer,model:Netlify.env.get("GEMINI_MODEL")||"gemini-2.5-flash"});
+        const {question}=await body(req),prompt=String(question||"").trim();
+        if(!prompt||prompt.length>4000)return json({error:"Enter a football scenario of up to 4,000 characters."},400);
+        const result=await geminiDecisionRequest(prompt,{suitability:{type:"score",instructions:"How suitable is this football selection for a cautious accumulator, based only on the facts supplied?",criteria:["0 — Reject: unsupported or highly risky.","1 — Weak: major uncertainty.","2 — Mixed: insufficient evidence.","3 — Favorable: meaningful supporting evidence.","4 — Strong: multiple consistent supporting indicators."]}},"connection test");
+        const answer=result.answers.suitability;
+        return json({ok:true,model:"gemini-decision-1",score:answer?.score??null,confidence:answer?.confidence??null,probabilities:answer?.probabilities??{}});
       }
       if(path==="admin/prompts" && req.method==="GET") {
         const rows=await db.sql<{prompt_key:string,prompt_text:string,updated_at:string}>`SELECT prompt_key,prompt_text,updated_at FROM prompts`;
@@ -362,40 +250,36 @@ export default async (req:Request) => {
       }
       if(path==="admin/run" && req.method==="POST") {
         const rows=await db.sql<{prompt_key:string,prompt_text:string}>`SELECT prompt_key,prompt_text FROM prompts WHERE prompt_key='master' LIMIT 1`;
-        const master=rows[0]?.prompt_text || defaults.master;
-        const date=nigeriaToday();
-        console.info("[daily-football-picks] Fetching fixtures and available odds from API-Football");
+        const master=rows[0]?.prompt_text||defaults.master,date=nigeriaToday();
+        console.info("[daily-football-picks] Fetching fixtures and odds from API-Football");
         const footballData=await loadApiFootballData(date);
-        if(!footballData.fixtures.length || !footballData.oddsRecords.length) {
-          const noBet={date,title:"Daily Football Picks",selections:[],combined_odds:null,confidence_note:"API-Football did not return upcoming fixtures with available bookmaker odds for today. No bet is recommended; no fixture or price was invented.",recommendation:"NO BET",research_notes:["Data source: API-Football.","Fixtures returned: "+footballData.fixtures.length,"Verified odds records: "+footballData.oddsRecords.length]};
-          await db.sql`INSERT INTO daily_picks(pick_date,payload,status) VALUES (${date},${JSON.stringify(noBet)}::jsonb,'published') ON CONFLICT(pick_date) DO UPDATE SET payload=EXCLUDED.payload,status='published',created_at=NOW()`;
-          return json({ok:true,pick:noBet,model_requests:0,api_football_requests:footballData.apiRequests,api_football_remaining:footballData.remaining,request_breakdown:{api_football:footballData.apiRequests,gemini_research:0,gemini_decision:0}});
-        }
-        const researchInput={
-          date,
-          source:"API-Football",
-          source_note:"Only supplied fixtures and bookmaker odds are eligible. Prediction enrichment is present only for listed fixture IDs.",
-          fixtures:footballData.fixtures,
-          bookmaker_odds:footballData.oddsRecords,
-          api_football_predictions:footballData.predictionData
+        const publishNoBet=async(message:string,notes:string[])=>{
+          const pick={date,title:"Daily Football Picks",selections:[],combined_odds:null,confidence_note:message,recommendation:"NO BET",research_notes:notes,decision_summary:{model:"gemini-decision-1"}};
+          await db.sql`INSERT INTO daily_picks(pick_date,payload,status) VALUES (${date},${JSON.stringify(pick)}::jsonb,'published') ON CONFLICT(pick_date) DO UPDATE SET payload=EXCLUDED.payload,status='published',created_at=NOW()`;
+          return pick;
         };
-        console.info("[daily-football-picks] Sending verified API-Football data to Gemini", {fixtures:footballData.fixtures.length,odds:footballData.oddsRecords.length});
-        const research=await runGeminiResearch(master.replaceAll("{{NIGERIA_DATE}}",date),`Nigerian date: ${date}. Analyse only this API-Football data. Return candidates only when the exact fixture_id, bookmaker, market_name, selection and decimal_odds exist in bookmaker_odds. Never make up missing team information or odds.\n\nAPI-FOOTBALL DATA:\n${JSON.stringify(researchInput)}`);
-        const proposed=Array.isArray(research?.candidates)?research.candidates:[];
-        const candidates=validateApiCandidates(proposed,footballData);
-        if(!candidates.length) {
-          const noBet={date,title:"Daily Football Picks",selections:[],combined_odds:null,confidence_note:"No credible candidate selections were returned by the research stage. No bet is recommended.",recommendation:"NO BET",research_notes:research?.research_limitations||[]};
-          await db.sql`INSERT INTO daily_picks(pick_date,payload,status) VALUES (${date},${JSON.stringify(noBet)}::jsonb,'published') ON CONFLICT(pick_date) DO UPDATE SET payload=EXCLUDED.payload,status='published',created_at=NOW()`;
-          return json({ok:true,pick:noBet,model_requests:1,api_football_requests:footballData.apiRequests,api_football_remaining:footballData.remaining,request_breakdown:{api_football:footballData.apiRequests,gemini_research:1,gemini_decision:0}});
+        if(!footballData.fixtures.length||!footballData.oddsRecords.length){
+          const pick=await publishNoBet("API-Football returned no upcoming fixtures with available bookmaker odds for today. No bet is recommended.",["Data source: API-Football.","Fixtures returned: "+footballData.fixtures.length,"Verified odds records: "+footballData.oddsRecords.length]);
+          return json({ok:true,pick,model_requests:0,api_football_requests:footballData.apiRequests,api_football_remaining:footballData.remaining,request_breakdown:{api_football:footballData.apiRequests,gemini_decision:0}});
         }
-        console.info("[daily-football-picks] Gemini decision request started", {candidate_count:candidates.length});
-        const answers=await runGeminiDecision(JSON.stringify({date,research_summary:research.research_summary,candidates}));
+        const bestByMarket=new Map<string,any>();
+        for(const record of footballData.oddsRecords){
+          const odds=Number(record.decimal_odds);if(!Number.isFinite(odds)||odds<1.15||odds>2.50)continue;
+          const key=[record.fixture_id,record.market_name,record.selection].join("|"),existing=bestByMarket.get(key);
+          if(!existing||odds>Number(existing.decimal_odds))bestByMarket.set(key,record);
+        }
+        const candidates=[...bestByMarket.values()].slice(0,100);
+        if(!candidates.length){
+          const pick=await publishNoBet("API-Football returned no bookmaker selections within the configured candidate odds range. No bet is recommended.",["No fixture or odds were invented."]);
+          return json({ok:true,pick,model_requests:0,api_football_requests:footballData.apiRequests,api_football_remaining:footballData.remaining,request_breakdown:{api_football:footballData.apiRequests,gemini_decision:0}});
+        }
+        const inputData={date,provider:"API-Football",fixtures:footballData.fixtures,bookmaker_odds:footballData.oddsRecords,api_football_predictions:footballData.predictionData};
+        console.info("[daily-football-picks] Sending API-Football data to Gemini Decision 1",{fixtures:footballData.fixtures.length,candidates:candidates.length});
+        const answers=await runGeminiCandidateScoring(master.replaceAll("{{NIGERIA_DATE}}",date),inputData,candidates);
         const final=buildSlip(candidates,answers,date);
-        final.research_summary=research.research_summary||"";
-        final.research_limitations=research.research_limitations||[];
         await db.sql`INSERT INTO daily_picks(pick_date,payload,status) VALUES (${date},${JSON.stringify(final)}::jsonb,'published') ON CONFLICT(pick_date) DO UPDATE SET payload=EXCLUDED.payload,status='published',created_at=NOW()`;
-        console.info("[daily-football-picks] Gemini workflow completed: 2 model requests maximum");
-        return json({ok:true,pick:final,model_requests:2,api_football_requests:footballData.apiRequests,api_football_remaining:footballData.remaining,request_breakdown:{api_football:footballData.apiRequests,gemini_research:1,gemini_decision:1}});
+        console.info("[daily-football-picks] Gemini Decision 1 workflow completed: one Decisions API request");
+        return json({ok:true,pick:final,model:"gemini-decision-1",model_requests:1,api_football_requests:footballData.apiRequests,api_football_remaining:footballData.remaining,request_breakdown:{api_football:footballData.apiRequests,gemini_decision:1}});
       }
     }
     return json({error:"Not found."},404);
