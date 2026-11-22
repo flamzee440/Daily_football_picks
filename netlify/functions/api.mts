@@ -69,12 +69,46 @@ export default async (req: Request) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: "kilo-auto/free",
-          messages: [{ role: "user", content: message }]
+          messages: [
+            {
+              role: "system",
+              content: `You are the publishing assistant for Daily Football Picks.
+Help the administrator turn match information and betting selections they provide into publishable picks.
+When the user asks to prepare, format, or publish picks, respond with ONLY one valid JSON object, no markdown fences and no text outside JSON, using this exact shape:
+{"reply":"A short helpful preview or a list of missing details","selections":[{"league":"League name","home":"Home team","away":"Away team","market":"Match Winner","selection":"Home win","odds":1.75,"kickoff":"2026-11-22T18:00"}]}
+Allowed market values: Match Winner, Double Chance, Over/Under Goals, Both Teams To Score, Correct Score, Other.
+Use decimal odds greater than 1. If odds or other required details are missing, do not invent them. Return selections: [] and clearly state what is missing in reply.
+Extract multiple matches when the user provides them. Do not create fictional fixtures, teams, odds, kickoff times, or predictions. If the user is only asking a normal football question, still return JSON with selections: [] and put the answer in reply.
+Keep league as "Football" only if no league is provided. kickoff may be an empty string if unknown.
+The selections array must contain objects with exactly the fields league, home, away, market, selection, odds, kickoff.`
+            },
+            { role: "user", content: message }
+          ]
         })
       });
       const result = await response.json() as any;
       if (!response.ok) return json({ error: result?.error?.message || `Kilo provider returned HTTP ${response.status}.` }, 502);
-      return json({ reply: result?.choices?.[0]?.message?.content || result?.output_text || "No response text was returned." });
+      const content = result?.choices?.[0]?.message?.content || result?.output_text || "";
+      let structured: any = null;
+      try {
+        const cleaned = String(content).replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+        structured = JSON.parse(cleaned);
+      } catch {
+        structured = null;
+      }
+      const selections = Array.isArray(structured?.selections) ? structured.selections.slice(0, 30).map((p: any) => ({
+        league: String(p.league || "Football").trim(),
+        home: String(p.home || "").trim(),
+        away: String(p.away || "").trim(),
+        market: String(p.market || "").trim(),
+        selection: String(p.selection || "").trim(),
+        odds: Number(p.odds),
+        kickoff: String(p.kickoff || "")
+      })) : [];
+      return json({
+        reply: typeof structured?.reply === "string" ? structured.reply : String(content || "Kilo did not return a response."),
+        selections: selections.filter((p: any) => p.home && p.away && p.market && p.selection && Number.isFinite(p.odds) && p.odds > 1)
+      });
     }
     return json({ error: "API route not found." }, 404);
   } catch (error) {
