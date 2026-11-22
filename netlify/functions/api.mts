@@ -178,6 +178,13 @@ export default async (req:Request) => {
     }
     if(path.startsWith("admin/")) {
       if(!adminAllowed(req)) return json({error:"Admin key required."},401);
+      if(path==="admin/test-ai" && req.method==="POST") {
+        const {question}=await body(req);
+        const prompt=String(question||"").trim();
+        if(!prompt||prompt.length>4000) return json({error:"Enter a test question of up to 4,000 characters."},400);
+        const answer=await kiloChatCompletion([{role:"user",content:prompt}],"connection test");
+        return json({ok:true,answer,model:"kilo-auto/free"});
+      }
       if(path==="admin/prompts" && req.method==="GET") {
         const rows=await db.sql<{prompt_key:string,prompt_text:string,updated_at:string}>`SELECT prompt_key,prompt_text,updated_at FROM prompts`;
         const prompts={...defaults};
