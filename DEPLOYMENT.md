@@ -26,11 +26,11 @@ Trigger a production deploy from `main`. The database migration in `netlify/data
 After deploy, check:
 - `/api/health` returns an `ok: true` response.
 - Create a free member account and sign in.
-- Open **Admin**, enter the `ADMIN_KEY`, load the three prompts, then save them.
-- Run the workflow once. It makes three Gemini 2.5 Flash calls with Google Search grounding and publishes the final JSON slip.
+- Open **Admin**, enter the `ADMIN_KEY`, load the master prompt, then save it.
+- Run the workflow once. The normal path makes exactly two model API requests: one Gemini 3.8 Flash Interactions API request with Google Search grounding to research and return candidates, followed by one Gemini Decision 1 Decisions API request to score all candidates together. The application filters and assembles the final slip locally, with no third model request.
 - The scheduled workflow runs at 11:00 UTC daily (6:00 AM New York during EST; 7:00 AM during EDT).
 
-## Important limitations in this first release
+## Workflow request limits\n- The normal workflow path makes one Gemini 3.8 Flash request and one Gemini Decision 1 request (two model requests total).\n- Gemini Decision 1 scores all returned candidates in one call; it does not make a separate call per match.\n- Search grounding may retrieve multiple web sources inside the single Flash request; these are not separate Gemini model requests.\n- The workflow does not automatically retry failed model calls. A failed run returns an error and must be started again manually.\n- The app assembles the final slip and calculates combined decimal odds in code. It does not use a third model call.\n\n## Important limitations in this first release
 - Member accounts use email/password sessions; email verification and password reset are not yet included.
 - The daily job is scheduled, but the first published deploy and a successful end-to-end Gemini test are required before it can run.
 - This is an informational predictions site, not a guarantee of outcomes or a betting/payment service.
