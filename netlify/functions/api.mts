@@ -102,7 +102,7 @@ function nigeriaToday() {
   const part=(type:string)=>parts.find(x=>x.type===type)?.value||"";
   return `${part("year")}-${part("month")}-${part("day")}`;
 }
-function buildSlip(candidates:any[], answers:Record<string,any>, date:string): Record<string,any> {
+function buildSlip(candidates:any[], answers:any[], date:string): Record<string,any> {
   const scored=candidates.map((candidate,index)=>{
     const review=answers.find((item:any)=>Number(item?.index)===index);
     const score=Number(review?.score ?? -1);
@@ -110,7 +110,7 @@ function buildSlip(candidates:any[], answers:Record<string,any>, date:string): R
     const safeProbability=Number(review?.safety_probability ?? 0);
     const safeConfidence=Number(review?.safety_confidence ?? 0);
     const odds=Number(candidate.decimal_odds ?? candidate.odds);
-    return {candidate,index,score,scoreConfidence,safeProbability,safeConfidence,odds};
+    return {candidate,index,score,scoreConfidence,safeProbability,safeConfidence,odds,review};
   }).filter(x=>Number.isFinite(x.odds)&&x.odds>1&&x.score>=3.0&&x.scoreConfidence>=0.55&&x.safeProbability>=0.75&&x.safeConfidence>=0.60)
     .sort((a,b)=>b.score-a.score || b.safeProbability-a.safeProbability);
   const pool=scored.slice(0,24);
@@ -142,7 +142,7 @@ function buildSlip(candidates:any[], answers:Record<string,any>, date:string): R
     market:x.candidate.market,
     prediction:x.candidate.prediction||x.candidate.market,
     odds:x.odds,
-    reason:(x.candidate.supporting_evidence||[]).slice(0,3).join(" "),
+    reason:[...(x.candidate.supporting_evidence||[]).slice(0,2),x.review?.reason].filter(Boolean).join(" "),
     sources:x.candidate.sources||[],
     decision_score:Number(x.score.toFixed(2)),
     decision_confidence:Number(x.scoreConfidence.toFixed(3)),
