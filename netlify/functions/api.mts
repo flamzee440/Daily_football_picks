@@ -62,12 +62,16 @@ export default async (req: Request) => {
       return json({ ok: true, count: valid.length });
     }
     if (req.method === "POST" && path === "admin/chat") {
-      const endpoint = Netlify.env.get("KILO_API_URL");
-      const token = Netlify.env.get("KILO_API_KEY");
-      if (!endpoint || !token) return json({ error: "Kilo AI is not configured yet. Add KILO_API_URL and KILO_API_KEY in Netlify environment variables." }, 503);
       const { message } = await req.json() as any;
       if (!message || typeof message !== "string") return json({ error: "Enter a message." }, 400);
-      const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json", "Authorization": `Bearer ${token}` }, body: JSON.stringify({ model: Netlify.env.get("KILO_MODEL") || "default", messages: [{ role: "user", content: message }] }) });
+      const response = await fetch("https://ai-gateway.kilo.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "kilo-auto/free",
+          messages: [{ role: "user", content: message }]
+        })
+      });
       const result = await response.json() as any;
       if (!response.ok) return json({ error: result?.error?.message || `Kilo provider returned HTTP ${response.status}.` }, 502);
       return json({ reply: result?.choices?.[0]?.message?.content || result?.output_text || "No response text was returned." });
