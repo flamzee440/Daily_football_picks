@@ -3,10 +3,11 @@ import type { Config } from "@netlify/functions";
 const SITE = "https://daily-football-picks-1cc3.netlify.app";
 const wait = (ms:number) => new Promise(resolve => setTimeout(resolve, ms));
 
-export default async () => {
+export default async (request:Request) => {
   const adminKey = Netlify.env.get("ADMIN_KEY");
   if (!adminKey) throw new Error("ADMIN_KEY is not configured.");
-  const headers = { "content-type":"application/json", "x-admin-key":adminKey };
+  const cookie = request.headers.get("cookie") || "";
+  const headers = { "content-type":"application/json", "x-admin-key":adminKey, ...(cookie ? { cookie } : {}) };
   const call = async (path:string) => {
     const response = await fetch(SITE + "/api/" + path, {
       method: path === "admin/status" ? "GET" : "POST",
