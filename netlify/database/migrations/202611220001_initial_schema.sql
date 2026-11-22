@@ -1,0 +1,19 @@
+CREATE TABLE IF NOT EXISTS users (
+  id BIGSERIAL PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS prompts (
+  prompt_key TEXT PRIMARY KEY,
+  prompt_text TEXT NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS daily_picks (
+  pick_date DATE PRIMARY KEY,
+  payload JSONB NOT NULL,
+  status TEXT NOT NULL DEFAULT 'published',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
