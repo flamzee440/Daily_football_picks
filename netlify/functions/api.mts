@@ -36,56 +36,79 @@ function clearCookie() {
   return `${COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
 }
 async function body(req:Request) { return await req.json().catch(()=>({})); }
-async function runGemini(prompt:string, input:string) {
-  const key=secret("GEMINI_API_KEY");
-  const response=await fetch("https://generativelanguage.googleapis.com/v1beta/interactions",{
+async function runOpenAI(prompt:string, input:string) {
+  const key=secret("OPENAI_API_KEY");
+  const response=await fetch("https://api.openai.com/v1/responses",{
     method:"POST",
-    headers:{"content-type":"application/json","x-goog-api-key":key},
+    headers:{"content-type":"application/json","authorization":`Bearer ${key}`},
     body:JSON.stringify({
-      model:"gemini-3.8-flash",
-      input:prompt+"\n\nINPUT DATA:\n"+input,
-      tools:[{type:"google_search"}],
-      response_format:{type:"text",mime_type:"application/json"}
+      model:"gpt-6.2-astra",
+      tools:[{type:"web_search",search_context_size:"high"}],
+      tool_choice:"required",
+      text:{format:{type:"json_object"}},
+      input:prompt+"\\n\\nINPUT DATA:\\n"+input
     })
   });
   const data=await response.json();
-  if(!response.ok) throw new Error(data?.error?.message || `Gemini request failed (${response.status})`);
-  const outputText=Array.isArray(data?.steps)
-    ? data.steps.filter((step:any)=>step?.type==="model_output")
-        .flatMap((step:any)=>Array.isArray(step?.content)?step.content:[])
-        .filter((item:any)=>item?.type==="text")
-        .map((item:any)=>item.text||"").join("\n")
+  if(!response.ok) {
+    const detail=data?.error?.message || `OpenAI research request failed (${response.status})`;
+    throw new Error(`OpenAI research stage: ${detail}`);
+  }
+  const outputText=Array.isArray(data?.output)
+    ? data.output.filter((item:any)=>item?.type==="message")
+        .flatMap((item:any)=>Array.isArray(item?.content)?item.content:[])
+        .filter((item:any)=>item?.type==="output_text")
+        .map((item:any)=>item.text||"").join("\\n")
     : "";
   const text=outputText || data?.output_text || "";
-  if(!text) throw new Error("Gemini returned an empty response.");
-  const cleaned=text.replace(/^```json\s*/i,"").replace(/\s*```$/,"").trim();
-  return JSON.parse(cleaned);
+  if(!text) throw new Error("OpenAI returned an empty research response.");
+  const cleaned=text.replace(/^```json\\s*/i,"").replace(/\\s*```$/,"").trim();
+  try { return JSON.parse(cleaned); }
+  catch { throw new Error("OpenAI research stage returned invalid JSON. Please run the workflow again."); }
+}
+async function runOpenAIDecision(input:string) {
+  const key=secret("OPENAI_API_KEY");
+  const instructions=`You are the independent final risk reviewer for a football-picks workflow. Evaluate EVERY candidate in the supplied input. Do not conduct new fixture research and do not assume missing facts are true. Score evidence quality and conservative accumulator suitability. Reject stale or unverified odds, weak evidence, unclear fixtures, major lineup uncertainty, volatile markets, and unsupported probability claims. Do not select based on odds alone. Return one result for each candidate, preserving its zero-based index. Use conservative estimates. A score of 3 or 4 requires strong current evidence. Safety probability means your estimated probability that the selection itself wins, not a guarantee. Confidence measures how well the evidence supports your assessment.\\nReturn valid JSON only in this shape: { "reviews": [ { "index": 0, "score": 0, "confidence": 0.0, "safety_probability": 0.0, "safety_confidence": 0.0, "reason": "short explanation" } ] }\\nScore must be 0 to 4. All probability/confidence values must be between 0 and 1. Include every candidate exactly once.`;
+  const response=await fetch("https://api.openai.com/v1/responses",{
+    method:"POST",
+    headers:{"content-type":"application/json","authorization":`Bearer ${key}`},
+    body:JSON.stringify({
+      model:"gpt-6.2-astra",
+      text:{format:{type:"json_object"}},
+      input:instructions+"\\n\\nCANDIDATES TO REVIEW:\\n"+input
+    })
+  });
+  const data=await response.json();
+  if(!response.ok) {
+    const detail=data?.error?.message || `OpenAI decision request failed (${response.status})`;
+    throw new Error(`OpenAI decision stage: ${detail}`);
+  }
+  const outputText=Array.isArray(data?.output)
+    ? data.output.filter((item:any)=>item?.type==="message")
+        .flatMap((item:any)=>Array.isArray(item?.content)?item.content:[])
+        .filter((item:any)=>item?.type==="output_text")
+        .map((item:any)=>item.text||"").join("\\n")
+    : "";
+  const text=outputText || data?.output_text || "";
+  if(!text) throw new Error("OpenAI returned an empty decision response.");
+  let parsed:any;
+  try { parsed=JSON.parse(text.replace(/^```json\\s*/i,"").replace(/\\s*```$/,"").trim()); }
+  catch { throw new Error("OpenAI decision stage returned invalid JSON. Please run the workflow again."); }
+  if(!Array.isArray(parsed?.reviews)) throw new Error("OpenAI decision stage returned no candidate reviews.");
+  return parsed.reviews as any[];
 }
 function nigeriaToday() {
   const parts=new Intl.DateTimeFormat("en-GB", {timeZone:"Africa/Lagos",year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(new Date());
   const part=(type:string)=>parts.find(x=>x.type===type)?.value||"";
   return `${part("year")}-${part("month")}-${part("day")}`;
 }
-async function runDecision(input: string, questions: Record<string, unknown>) {
-  const key=secret("GEMINI_API_KEY");
-  const response=await fetch("https://generativelanguage.googleapis.com/v1beta/decisions", {
-    method:"POST",
-    headers:{"content-type":"application/json","x-goog-api-key":key},
-    body:JSON.stringify({model:"gemini-decision-1",input,questions})
-  });
-  const data=await response.json();
-  if(!response.ok) throw new Error(data?.error?.message || `Gemini Decision 1 request failed (${response.status})`);
-  if(!data?.answers || typeof data.answers!=="object") throw new Error("Gemini Decision 1 returned an unexpected response.");
-  return data.answers as Record<string, any>;
-}
 function buildSlip(candidates:any[], answers:Record<string,any>, date:string): Record<string,any> {
   const scored=candidates.map((candidate,index)=>{
-    const quality=answers[`quality_${index}`];
-    const safe=answers[`safe_${index}`];
-    const score=Number(quality?.score ?? quality?.expected_score_0_to_4 ?? -1);
-    const scoreConfidence=Number(quality?.confidence ?? 0);
-    const safeProbability=Number(safe?.noul ?? safe?.noul_probability_yes ?? safe?.probability_yes ?? 0);
-    const safeConfidence=Number(safe?.confidence ?? 0);
+    const review=answers.find((item:any)=>Number(item?.index)===index);
+    const score=Number(review?.score ?? -1);
+    const scoreConfidence=Number(review?.confidence ?? 0);
+    const safeProbability=Number(review?.safety_probability ?? 0);
+    const safeConfidence=Number(review?.safety_confidence ?? 0);
     const odds=Number(candidate.decimal_odds ?? candidate.odds);
     return {candidate,index,score,scoreConfidence,safeProbability,safeConfidence,odds};
   }).filter(x=>Number.isFinite(x.odds)&&x.odds>1&&x.score>=3.0&&x.scoreConfidence>=0.55&&x.safeProbability>=0.75&&x.safeConfidence>=0.60)
@@ -110,7 +133,7 @@ function buildSlip(candidates:any[], answers:Record<string,any>, date:string): R
     confidence_note:"No combination met the strict evidence and risk thresholds while reaching the 2.00–2.30 target. No bet is recommended.",
     research_notes:["The system did not force weak selections to reach the odds target."],
     recommendation:"NO BET",
-    decision_summary:{candidates_received:candidates.length,candidates_accepted:scored.length,model:"gemini-decision-1"}
+    decision_summary:{candidates_received:candidates.length,candidates_accepted:scored.length,model:"gpt-6.2-astra"}
   };
   const selections=best.map(x=>({
     match:x.candidate.match,
@@ -129,7 +152,7 @@ function buildSlip(candidates:any[], answers:Record<string,any>, date:string): R
   return {
     date,title:"Daily Football Picks",selections,combined_odds:Number(combined.toFixed(2)),
     confidence_note:"Selections passed the configured evidence and risk filters. No betting outcome is guaranteed; confirm odds and lineups before placing any bet.",
-    research_notes:["Research and candidate generation: one Gemini 3.8 Flash request.","Independent candidate scoring: one Gemini Decision 1 request.","Final slip assembly and combined-odds calculation: application code."],
+    research_notes:["Research and candidate generation: one OpenAI Responses API request with web search.","Independent candidate scoring: one OpenAI Responses API request.","Final slip assembly and combined-odds calculation: application code."],
     recommendation:"BET WITH CAUTION",
     decision_summary:{candidates_received:candidates.length,candidates_accepted:scored.length,selected:selections.length,model:"gemini-decision-1"}
   };
@@ -192,13 +215,13 @@ export default async (req:Request) => {
         const rows=await db.sql<{prompt_key:string,prompt_text:string}>`SELECT prompt_key,prompt_text FROM prompts WHERE prompt_key='master' LIMIT 1`;
         const master=rows[0]?.prompt_text || defaults.master;
         const date=nigeriaToday();
-        console.info("[daily-football-picks] Gemini 3.8 Flash research request started");
-        const research=await runGemini(master.replaceAll("{{NIGERIA_DATE}}",date),`Today's date in Nigeria (Africa/Lagos): ${date}. Research today's fixtures and return the required candidate JSON.`);
+        console.info("[daily-football-picks] OpenAI research request started");
+        const research=await runOpenAI(master.replaceAll("{{NIGERIA_DATE}}",date),`Today's date in Nigeria (Africa/Lagos): ${date}. Research today's fixtures and return the required candidate JSON.`);
         const candidates=Array.isArray(research?.candidates)?research.candidates.slice(0,40):[];
         if(!candidates.length) {
           const noBet={date,title:"Daily Football Picks",selections:[],combined_odds:null,confidence_note:"No credible candidate selections were returned by the research stage. No bet is recommended.",recommendation:"NO BET",research_notes:research?.research_limitations||[]};
           await db.sql`INSERT INTO daily_picks(pick_date,payload,status) VALUES (${date},${JSON.stringify(noBet)}::jsonb,'published') ON CONFLICT(pick_date) DO UPDATE SET payload=EXCLUDED.payload,status='published',created_at=NOW()`;
-          return json({ok:true,pick:noBet,model_requests:1,request_breakdown:{gemini_3_8_flash:1,gemini_decision_1:0}});
+          return json({ok:true,pick:noBet,model_requests:1,request_breakdown:{openai_research:1,openai_decision:0}});
         }
         const questions:Record<string,unknown>={};
         candidates.forEach((candidate:any,index:number)=>{
@@ -222,14 +245,14 @@ export default async (req:Request) => {
             }
           };
         });
-        console.info("[daily-football-picks] Gemini Decision 1 scoring request started", {candidate_count:candidates.length,question_count:Object.keys(questions).length});
-        const answers=await runDecision(JSON.stringify({date,research_summary:research.research_summary,candidates}),questions);
+        console.info("[daily-football-picks] OpenAI decision request started", {candidate_count:candidates.length});
+        const answers=await runOpenAIDecision(JSON.stringify({date,research_summary:research.research_summary,candidates}));
         const final=buildSlip(candidates,answers,date);
         final.research_summary=research.research_summary||"";
         final.research_limitations=research.research_limitations||[];
         await db.sql`INSERT INTO daily_picks(pick_date,payload,status) VALUES (${date},${JSON.stringify(final)}::jsonb,'published') ON CONFLICT(pick_date) DO UPDATE SET payload=EXCLUDED.payload,status='published',created_at=NOW()`;
-        console.info("[daily-football-picks] Workflow completed: 2 model requests maximum");
-        return json({ok:true,pick:final,model_requests:2,request_breakdown:{gemini_3_8_flash:1,gemini_decision_1:1}});
+        console.info("[daily-football-picks] OpenAI workflow completed: 2 model requests maximum");
+        return json({ok:true,pick:final,model_requests:2,request_breakdown:{openai_research:1,openai_decision:1}});
       }
     }
     return json({error:"Not found."},404);
