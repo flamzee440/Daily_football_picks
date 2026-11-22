@@ -62,7 +62,9 @@ async function runGemini(prompt:string, input:string) {
   return JSON.parse(cleaned);
 }
 function nigeriaToday() {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Lagos", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  const parts=new Intl.DateTimeFormat("en-GB", {timeZone:"Africa/Lagos",year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(new Date());
+  const part=(type:string)=>parts.find(x=>x.type===type)?.value||"";
+  return `${part("year")}-${part("month")}-${part("day")}`;
 }
 async function runDecision(input: string, questions: Record<string, unknown>) {
   const key=secret("GEMINI_API_KEY");
@@ -76,7 +78,7 @@ async function runDecision(input: string, questions: Record<string, unknown>) {
   if(!data?.answers || typeof data.answers!=="object") throw new Error("Gemini Decision 1 returned an unexpected response.");
   return data.answers as Record<string, any>;
 }
-function buildSlip(candidates:any[], answers:Record<string,any>, date:string) {
+function buildSlip(candidates:any[], answers:Record<string,any>, date:string): Record<string,any> {
   const scored=candidates.map((candidate,index)=>{
     const quality=answers[`quality_${index}`];
     const safe=answers[`safe_${index}`];
@@ -202,7 +204,7 @@ export default async (req:Request) => {
         candidates.forEach((candidate:any,index:number)=>{
           questions[`quality_${index}`]={
             type:"score",
-            instructions:`Assess this football betting candidate for conservative accumulator suitability. Candidate: ${JSON.stringify(candidate)}. Score only the quality of its evidence, freshness and verifiability, relevant form and home/away data, injury/lineup certainty, tactical/context fit, market volatility, and whether the probability claim is justified. Do not reward attractive odds alone.`,
+            instructions:`Assess candidate index ${index} in the shared input for conservative accumulator suitability. Score evidence quality, freshness and verifiability, relevant form and home/away data, injury/lineup certainty, tactical/context fit, market volatility, and whether the probability claim is justified. Do not reward attractive odds alone.`,
             criteria:[
               "0 — Reject: fabricated, materially unsupported, stale, or highly volatile.",
               "1 — Very weak: major evidence gaps or serious unresolved risks.",
@@ -213,7 +215,7 @@ export default async (req:Request) => {
           };
           questions[`safe_${index}`]={
             type:"noul",
-            instructions:`Is this specific candidate sufficiently supported and comparatively low-risk to retain in a conservative accumulator? Candidate: ${JSON.stringify(candidate)}. Answer yes only if its fixture, market, current odds, evidence and material team-news risks are adequately supported. Missing or unverifiable information should count against it.`,
+            instructions:`Is candidate index ${index} in the shared input sufficiently supported and comparatively low-risk to retain in a conservative accumulator? Answer yes only if its fixture, market, current odds, evidence and material team-news risks are adequately supported. Missing or unverifiable information should count against it.`,
             criteria:{
               true_description:"The candidate is sufficiently verified, evidence-backed, and comparatively low-risk for further consideration.",
               false_description:"The candidate has material uncertainty, weak or stale evidence, unreliable odds, or excessive volatility."
