@@ -51,12 +51,12 @@ async function geminiDecisionRequest(input:string,questions:Record<string,any>,s
   if(!data?.answers||typeof data.answers!=="object")throw new Error("Gemini Decision 1 returned no typed answers.");
   return data;
 }
-async function runGeminiCandidateScoring(master:string,inputData:any,candidates:any[]) {
+async function runGeminiCandidateScoring(master:string,inputData:any,candidates:any[],stage="candidate evaluation") {
   const questions:Record<string,any>={};
   candidates.forEach((candidate,index)=>{
     questions["candidate_"+String(index).padStart(3,"0")]={
       type:"score",
-      instructions:"Evaluate candidate "+index+" from the supplied CANDIDATES list for conservative football accumulator suitability. Use only the API-Football fixture, prediction, comparison and odds information supplied. Consider exact market type, evidence consistency, missing information and volatility. Do not infer unavailable team news or treat odds as a probability. Return a high rating only when the supplied evidence genuinely supports the selection.",
+      instructions:"Evaluate candidate "+index+" from the supplied CANDIDATES list for "+stage+". Use only the API-Football fixture, prediction, comparison and odds information supplied. Consider exact market type, evidence consistency, missing information and volatility. Do not infer unavailable team news or treat odds as a probability. Return a high rating only when the supplied evidence genuinely supports the selection.",
       criteria:[
         "0 — Reject: evidence is missing, contradictory, or the market is too volatile.",
         "1 — Weak: little support or substantial uncertainty; do not include.",
@@ -72,8 +72,16 @@ async function runGeminiCandidateScoring(master:string,inputData:any,candidates:
     const answer=result.answers["candidate_"+String(index).padStart(3,"0")];
     if(!answer||answer.type!=="score")return {index,score:-1,confidence:0,safety_probability:0,safety_confidence:0};
     const score=Number(answer.score),confidence=Number(answer.confidence);
-    return {index,score:Number.isFinite(score)?score:-1,confidence:Number.isFinite(confidence)?confidence:0,safety_probability:Number.isFinite(score)?Math.max(0,Math.min(1,score/4)):0,safety_confidence:Number.isFinite(confidence)?confidence:0};
+    return {index,score:Number.isFinite(score)?score:-1,confidence:Number.isFinite(confidence)?confidence:0};
   });
+}
+async function getWorkflowState() {
+  const rows=await db.sql`SELECT prompt_text FROM prompts WHERE prompt_key='workflow_state' LIMIT 1`;
+  if(!rows[0]?.prompt_text)return null;
+  try{return JSON.parse(rows[0].prompt_text)}catch{return null}
+}
+async function putWorkflowState(s:any) {
+  await db.sql`INSERT INTO prompts(prompt_key,prompt_text,updated_at) VALUES (${'workflow_state'},${JSON.stringify(s)},NOW()) ON CONFLICT(prompt_key) DO UPDATE SET prompt_text=EXCLUDED.prompt_text,updated_at=NOW()`;
 }
 function nigeriaToday() {
   const parts=new Intl.DateTimeFormat("en-GB", {timeZone:"Africa/Lagos",year:"numeric",month:"2-digit",day:"2-digit"}).formatToParts(new Date());
@@ -83,9 +91,9 @@ function nigeriaToday() {
 function buildSlip(candidates:any[],answers:any[],date:string): Record<string,any> {
   const scored=candidates.map((candidate,index)=>{
     const review=answers.find((item:any)=>Number(item?.index)===index);
-    const score=Number(review?.score??-1),confidence=Number(review?.confidence??0),suitability=Number(review?.safety_probability??0),odds=Number(candidate.decimal_odds);
-    return {candidate,index,score,confidence,suitability,odds,review};
-  }).filter(x=>Number.isFinite(x.odds)&&x.odds>1&&x.score>=3&&x.confidence>=0.55&&x.suitability>=0.75).sort((a,b)=>b.score-a.score||b.confidence-a.confidence);
+    const score=Number(review?.score??-1),confidence=Number(review?.confidence??0),odds=Number(candidate.decimal_odds);
+    return {candidate,index,score,confidence,odds,review};
+  }).filter(x=>Number.isFinite(x.odds)&&x.odds>1&&x.score>=3&&x.confidence>=0.55).sort((a,b)=>b.score-a.score||b.confidence-a.confidence);
   const pool=scored.slice(0,24);let best:any[]|null=null,bestQuality=-Infinity;
   const walk=(start:number,chosen:any[],product:number)=>{
     if(chosen.length&&product>=2&&product<=2.30){
@@ -248,38 +256,62 @@ export default async (req:Request) => {
         await db.sql`INSERT INTO prompts(prompt_key,prompt_text,updated_at) VALUES (${"master"},${value},NOW()) ON CONFLICT(prompt_key) DO UPDATE SET prompt_text=EXCLUDED.prompt_text,updated_at=NOW()`;
         return json({ok:true});
       }
+      if(path==="admin/status" && req.method==="GET") {
+        const s=await getWorkflowState();
+        if(!s)return json({status:"idle",stage:"idle",completedBatches:0,totalBatches:0,progress:0});
+        const total=s.batches?.length||0,done=s.nextBatchIndex||0;
+        return json({status:s.status,stage:s.stage,completedBatches:done,totalBatches:total,progress:s.status==="completed"?100:(total?Math.round(done/total*100):0),nextRunAt:s.nextRunAt||null,pick:s.pick||null,model_requests:s.modelRequests||0});
+      }
       if(path==="admin/run" && req.method==="POST") {
-        const rows=await db.sql<{prompt_key:string,prompt_text:string}>`SELECT prompt_key,prompt_text FROM prompts WHERE prompt_key='master' LIMIT 1`;
+        const old=await getWorkflowState();
+        if(old?.status==="running")return json({status:"running",started:true,stage:old.stage,completedBatches:old.nextBatchIndex||0,totalBatches:old.batches?.length||0});
+        const rows=await db.sql`SELECT prompt_text FROM prompts WHERE prompt_key='master' LIMIT 1`;
         const master=rows[0]?.prompt_text||defaults.master,date=nigeriaToday();
-        console.info("[daily-football-picks] Fetching fixtures and odds from API-Football");
-        const footballData=await loadApiFootballData(date);
-        const publishNoBet=async(message:string,notes:string[])=>{
-          const pick={date,title:"Daily Football Picks",selections:[],combined_odds:null,confidence_note:message,recommendation:"NO BET",research_notes:notes,decision_summary:{model:"gemini-decision-1"}};
-          await db.sql`INSERT INTO daily_picks(pick_date,payload,status) VALUES (${date},${JSON.stringify(pick)}::jsonb,'published') ON CONFLICT(pick_date) DO UPDATE SET payload=EXCLUDED.payload,status='published',created_at=NOW()`;
-          return pick;
-        };
-        if(!footballData.fixtures.length||!footballData.oddsRecords.length){
-          const pick=await publishNoBet("API-Football returned no upcoming fixtures with available bookmaker odds for today. No bet is recommended.",["Data source: API-Football.","Fixtures returned: "+footballData.fixtures.length,"Verified odds records: "+footballData.oddsRecords.length]);
-          return json({ok:true,pick,model_requests:0,api_football_requests:footballData.apiRequests,api_football_remaining:footballData.remaining,request_breakdown:{api_football:footballData.apiRequests,gemini_decision:0}});
+        const data=await loadApiFootballData(date);
+        const noBet=async(message:string)=>{const pick={date,title:"Daily Football Picks",selections:[],combined_odds:null,confidence_note:message,recommendation:"NO BET",research_notes:["API-Football supplied the fixture and bookmaker data."],decision_summary:{model:"gemini-decision-1"}};await db.sql`INSERT INTO daily_picks(pick_date,payload,status) VALUES (${date},${JSON.stringify(pick)}::jsonb,'published') ON CONFLICT(pick_date) DO UPDATE SET payload=EXCLUDED.payload,status='published',created_at=NOW()`;return pick;};
+        if(!data.fixtures.length||!data.oddsRecords.length){const pick=await noBet("No upcoming fixtures with available bookmaker odds were returned by API-Football. No bet is recommended.");return json({status:"completed",stage:"complete",pick,model_requests:0});}
+        const unique=new Map<string,any>();
+        for(const r of data.oddsRecords){const odd=Number(r.decimal_odds);if(odd<1.15||odd>2.5||!Number.isFinite(odd))continue;const k=[r.fixture_id,r.market_name,r.selection].join("|");const prev=unique.get(k);if(!prev||odd>Number(prev.decimal_odds))unique.set(k,r);}
+        const candidates=[...unique.values()].slice(0,50);
+        if(!candidates.length){const pick=await noBet("No API-Football bookmaker selections met the configured odds range. No bet is recommended.");return json({status:"completed",stage:"complete",pick,model_requests:0});}
+        const batches=Array.from({length:Math.ceil(candidates.length/10)},(_,i)=>candidates.slice(i*10,(i+1)*10));
+        const s={status:"running",stage:"batch",date,master:master.replaceAll("{{NIGERIA_DATE}}",date),candidates,batches,fixtures:data.fixtures,predictionData:data.predictionData,nextBatchIndex:0,answers:[],nextRunAt:Date.now(),modelRequests:0};
+        await putWorkflowState(s);
+        return json({status:"running",started:true,stage:s.stage,completedBatches:0,totalBatches:batches.length,progress:0});
+      }
+      if(path==="admin/process-next" && req.method==="POST") {
+        const s=await getWorkflowState();
+        if(!s||s.status!=="running")return json({error:"No active workflow."},409);
+        if(Date.now()<Number(s.nextRunAt||0))return json({error:"The one-minute interval has not elapsed.",retryAfterMs:Number(s.nextRunAt)-Date.now()},429);
+        if(s.stage==="batch"){
+          const i=Number(s.nextBatchIndex||0),batch=s.batches[i];
+          if(!batch?.length)throw new Error("Next batch is missing.");
+          const ids=new Set(batch.map((x:any)=>Number(x.fixture_id)));
+          const provider={date:s.date,provider:"API-Football",fixtures:s.fixtures.filter((x:any)=>ids.has(Number(x.fixture_id))),predictions:s.predictionData.filter((x:any)=>ids.has(Number(x.fixture_id)))};
+          const results=await runGeminiCandidateScoring(s.master,provider,batch,"conservative suitability in batch "+(i+1));
+          s.answers.push(...results.map((x:any)=>({...x,index:i*10+Number(x.index)})));
+          s.nextBatchIndex=i+1;s.modelRequests++;
+          s.stage=s.nextBatchIndex>=s.batches.length?"refinement":"batch";s.nextRunAt=Date.now()+60000;
+          await putWorkflowState(s);
+          return json({status:"running",stage:s.stage,completedBatches:s.nextBatchIndex,totalBatches:s.batches.length,progress:Math.round(s.nextBatchIndex/s.batches.length*100),nextRunAt:s.nextRunAt,model_requests:s.modelRequests});
         }
-        const bestByMarket=new Map<string,any>();
-        for(const record of footballData.oddsRecords){
-          const odds=Number(record.decimal_odds);if(!Number.isFinite(odds)||odds<1.15||odds>2.50)continue;
-          const key=[record.fixture_id,record.market_name,record.selection].join("|"),existing=bestByMarket.get(key);
-          if(!existing||odds>Number(existing.decimal_odds))bestByMarket.set(key,record);
+        if(s.stage==="refinement"){
+          const ranked=s.candidates.map((candidate:any,index:number)=>({candidate,index,review:s.answers.find((x:any)=>Number(x.index)===index)})).sort((a:any,b:any)=>Number(b.review?.score??-1)-Number(a.review?.score??-1)||Number(b.review?.confidence??0)-Number(a.review?.confidence??0)).slice(0,12);
+          let pick:any;
+          if(ranked.length){
+            const shortlist=ranked.map((x:any)=>x.candidate),ids=new Set(shortlist.map((x:any)=>Number(x.fixture_id)));
+            const provider={date:s.date,provider:"API-Football",fixtures:s.fixtures.filter((x:any)=>ids.has(Number(x.fixture_id))),predictions:s.predictionData.filter((x:any)=>ids.has(Number(x.fixture_id))),batch_scores:ranked.map((x:any)=>({candidate_index:x.index,score:x.review.score,confidence:x.review.confidence}))};
+            const finalScores=await runGeminiCandidateScoring(s.master,provider,shortlist,"final refinement after all independent match batches");
+            pick=buildSlip(shortlist,finalScores,s.date);
+            pick.research_notes=[...(pick.research_notes||[]),"Each batch was evaluated separately by Gemini Decision 1 at one-minute intervals, followed by a separate refinement request after another minute."];
+            pick.decision_summary={...(pick.decision_summary||{}),batches:s.batches.length,model_requests:s.modelRequests+1,model:"gemini-decision-1"};
+            s.modelRequests++;
+          }else pick=buildSlip(s.candidates,s.answers,s.date);
+          await db.sql`INSERT INTO daily_picks(pick_date,payload,status) VALUES (${s.date},${JSON.stringify(pick)}::jsonb,'published') ON CONFLICT(pick_date) DO UPDATE SET payload=EXCLUDED.payload,status='published',created_at=NOW()`;
+          s.pick=pick;s.status="completed";s.stage="complete";await putWorkflowState(s);
+          return json({status:"completed",stage:"complete",completedBatches:s.batches.length,totalBatches:s.batches.length,progress:100,pick,model_requests:s.modelRequests});
         }
-        const candidates=[...bestByMarket.values()].slice(0,100);
-        if(!candidates.length){
-          const pick=await publishNoBet("API-Football returned no bookmaker selections within the configured candidate odds range. No bet is recommended.",["No fixture or odds were invented."]);
-          return json({ok:true,pick,model_requests:0,api_football_requests:footballData.apiRequests,api_football_remaining:footballData.remaining,request_breakdown:{api_football:footballData.apiRequests,gemini_decision:0}});
-        }
-        const inputData={date,provider:"API-Football",fixtures:footballData.fixtures,bookmaker_odds:footballData.oddsRecords,api_football_predictions:footballData.predictionData};
-        console.info("[daily-football-picks] Sending API-Football data to Gemini Decision 1",{fixtures:footballData.fixtures.length,candidates:candidates.length});
-        const answers=await runGeminiCandidateScoring(master.replaceAll("{{NIGERIA_DATE}}",date),inputData,candidates);
-        const final=buildSlip(candidates,answers,date);
-        await db.sql`INSERT INTO daily_picks(pick_date,payload,status) VALUES (${date},${JSON.stringify(final)}::jsonb,'published') ON CONFLICT(pick_date) DO UPDATE SET payload=EXCLUDED.payload,status='published',created_at=NOW()`;
-        console.info("[daily-football-picks] Gemini Decision 1 workflow completed: one Decisions API request");
-        return json({ok:true,pick:final,model:"gemini-decision-1",model_requests:1,api_football_requests:footballData.apiRequests,api_football_remaining:footballData.remaining,request_breakdown:{api_football:footballData.apiRequests,gemini_decision:1}});
+        throw new Error("Unknown workflow stage: "+s.stage);
       }
     }
     return json({error:"Not found."},404);
