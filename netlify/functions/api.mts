@@ -46,7 +46,7 @@ async function runOpenAI(prompt:string, input:string) {
       tools:[{type:"web_search",search_context_size:"high"}],
       tool_choice:"required",
       text:{format:{type:"json_object"}},
-      input:prompt+"\\n\\nINPUT DATA:\\n"+input
+      input:prompt+"\n\nINPUT DATA:\n"+input
     })
   });
   const data=await response.json();
@@ -58,24 +58,24 @@ async function runOpenAI(prompt:string, input:string) {
     ? data.output.filter((item:any)=>item?.type==="message")
         .flatMap((item:any)=>Array.isArray(item?.content)?item.content:[])
         .filter((item:any)=>item?.type==="output_text")
-        .map((item:any)=>item.text||"").join("\\n")
+        .map((item:any)=>item.text||"").join("\n")
     : "";
   const text=outputText || data?.output_text || "";
   if(!text) throw new Error("OpenAI returned an empty research response.");
-  const cleaned=text.replace(/^```json\\s*/i,"").replace(/\\s*```$/,"").trim();
+  const cleaned=text.replace(/^```json\s*/i,"").replace(/\s*```$/,"").trim();
   try { return JSON.parse(cleaned); }
   catch { throw new Error("OpenAI research stage returned invalid JSON. Please run the workflow again."); }
 }
 async function runOpenAIDecision(input:string) {
   const key=secret("OPENAI_API_KEY");
-  const instructions=`You are the independent final risk reviewer for a football-picks workflow. Evaluate EVERY candidate in the supplied input. Do not conduct new fixture research and do not assume missing facts are true. Score evidence quality and conservative accumulator suitability. Reject stale or unverified odds, weak evidence, unclear fixtures, major lineup uncertainty, volatile markets, and unsupported probability claims. Do not select based on odds alone. Return one result for each candidate, preserving its zero-based index. Use conservative estimates. A score of 3 or 4 requires strong current evidence. Safety probability means your estimated probability that the selection itself wins, not a guarantee. Confidence measures how well the evidence supports your assessment.\\nReturn valid JSON only in this shape: { "reviews": [ { "index": 0, "score": 0, "confidence": 0.0, "safety_probability": 0.0, "safety_confidence": 0.0, "reason": "short explanation" } ] }\\nScore must be 0 to 4. All probability/confidence values must be between 0 and 1. Include every candidate exactly once.`;
+  const instructions=`You are the independent final risk reviewer for a football-picks workflow. Evaluate EVERY candidate in the supplied input. Do not conduct new fixture research and do not assume missing facts are true. Score evidence quality and conservative accumulator suitability. Reject stale or unverified odds, weak evidence, unclear fixtures, major lineup uncertainty, volatile markets, and unsupported probability claims. Do not select based on odds alone. Return one result for each candidate, preserving its zero-based index. Use conservative estimates. A score of 3 or 4 requires strong current evidence. Safety probability means your estimated probability that the selection itself wins, not a guarantee. Confidence measures how well the evidence supports your assessment.\nReturn valid JSON only in this shape: { "reviews": [ { "index": 0, "score": 0, "confidence": 0.0, "safety_probability": 0.0, "safety_confidence": 0.0, "reason": "short explanation" } ] }\nScore must be 0 to 4. All probability/confidence values must be between 0 and 1. Include every candidate exactly once.`;
   const response=await fetch("https://api.openai.com/v1/responses",{
     method:"POST",
     headers:{"content-type":"application/json","authorization":`Bearer ${key}`},
     body:JSON.stringify({
       model:"gpt-6.2-astra",
       text:{format:{type:"json_object"}},
-      input:instructions+"\\n\\nCANDIDATES TO REVIEW:\\n"+input
+      input:instructions+"\n\nCANDIDATES TO REVIEW:\n"+input
     })
   });
   const data=await response.json();
@@ -87,12 +87,12 @@ async function runOpenAIDecision(input:string) {
     ? data.output.filter((item:any)=>item?.type==="message")
         .flatMap((item:any)=>Array.isArray(item?.content)?item.content:[])
         .filter((item:any)=>item?.type==="output_text")
-        .map((item:any)=>item.text||"").join("\\n")
+        .map((item:any)=>item.text||"").join("\n")
     : "";
   const text=outputText || data?.output_text || "";
   if(!text) throw new Error("OpenAI returned an empty decision response.");
   let parsed:any;
-  try { parsed=JSON.parse(text.replace(/^```json\\s*/i,"").replace(/\\s*```$/,"").trim()); }
+  try { parsed=JSON.parse(text.replace(/^```json\s*/i,"").replace(/\s*```$/,"").trim()); }
   catch { throw new Error("OpenAI decision stage returned invalid JSON. Please run the workflow again."); }
   if(!Array.isArray(parsed?.reviews)) throw new Error("OpenAI decision stage returned no candidate reviews.");
   return parsed.reviews as any[];
@@ -154,7 +154,7 @@ function buildSlip(candidates:any[], answers:Record<string,any>, date:string): R
     confidence_note:"Selections passed the configured evidence and risk filters. No betting outcome is guaranteed; confirm odds and lineups before placing any bet.",
     research_notes:["Research and candidate generation: one OpenAI Responses API request with web search.","Independent candidate scoring: one OpenAI Responses API request.","Final slip assembly and combined-odds calculation: application code."],
     recommendation:"BET WITH CAUTION",
-    decision_summary:{candidates_received:candidates.length,candidates_accepted:scored.length,selected:selections.length,model:"gemini-decision-1"}
+    decision_summary:{candidates_received:candidates.length,candidates_accepted:scored.length,selected:selections.length,model:"gpt-6.2-astra"}
   };
 }
 
@@ -223,28 +223,6 @@ export default async (req:Request) => {
           await db.sql`INSERT INTO daily_picks(pick_date,payload,status) VALUES (${date},${JSON.stringify(noBet)}::jsonb,'published') ON CONFLICT(pick_date) DO UPDATE SET payload=EXCLUDED.payload,status='published',created_at=NOW()`;
           return json({ok:true,pick:noBet,model_requests:1,request_breakdown:{openai_research:1,openai_decision:0}});
         }
-        const questions:Record<string,unknown>={};
-        candidates.forEach((candidate:any,index:number)=>{
-          questions[`quality_${index}`]={
-            type:"score",
-            instructions:`Assess candidate index ${index} in the shared input for conservative accumulator suitability. Score evidence quality, freshness and verifiability, relevant form and home/away data, injury/lineup certainty, tactical/context fit, market volatility, and whether the probability claim is justified. Do not reward attractive odds alone.`,
-            criteria:[
-              "0 — Reject: fabricated, materially unsupported, stale, or highly volatile.",
-              "1 — Very weak: major evidence gaps or serious unresolved risks.",
-              "2 — Borderline: some support, but meaningful uncertainty remains.",
-              "3 — Strong: current, relevant evidence and manageable risks.",
-              "4 — Exceptional: multiple independent, current evidence points and comparatively low uncertainty."
-            ]
-          };
-          questions[`safe_${index}`]={
-            type:"noul",
-            instructions:`Is candidate index ${index} in the shared input sufficiently supported and comparatively low-risk to retain in a conservative accumulator? Answer yes only if its fixture, market, current odds, evidence and material team-news risks are adequately supported. Missing or unverifiable information should count against it.`,
-            criteria:{
-              true_description:"The candidate is sufficiently verified, evidence-backed, and comparatively low-risk for further consideration.",
-              false_description:"The candidate has material uncertainty, weak or stale evidence, unreliable odds, or excessive volatility."
-            }
-          };
-        });
         console.info("[daily-football-picks] OpenAI decision request started", {candidate_count:candidates.length});
         const answers=await runOpenAIDecision(JSON.stringify({date,research_summary:research.research_summary,candidates}));
         const final=buildSlip(candidates,answers,date);
