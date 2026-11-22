@@ -6,7 +6,7 @@ import { SignJWT, jwtVerify } from "jose";
 const db = getDatabase();
 const COOKIE = "dfp_session";
 const defaults: Record<string,string> = {
-  master: "# MASTER PROMPT — DAILY FOOTBALL RESEARCH & LOW-RISK BETTING SELECTIONS\n\n## ROLE AND OBJECTIVE\nAct as an advanced football research and betting analysis system. Research today's football fixtures and identify the strongest evidence-backed betting opportunities. The highest priority is reducing risk, verifying information, and avoiding weak selections. Do not chase odds or force a bet.\n\n## DATE AND FIXTURES\nUse today's actual date in Nigeria (Africa/Lagos time): {{NIGERIA_DATE}}.\nResearch professional football matches scheduled to take place on that Nigerian calendar date. Check kickoff times and time zones carefully. Exclude completed, postponed, cancelled, or incorrectly dated fixtures. Consider relevant leagues and competitions worldwide, not only the most popular leagues.\n\n## DEEP RESEARCH FOR EACH POTENTIAL MATCH\nInvestigate:\n- Recent form over the last 5–10 matches, with appropriate weighting for opponent strength.\n- League position, points, season performance, and the importance of the fixture.\n- Home and away performance.\n- Goals scored and conceded, including first-half and second-half patterns.\n- Over/under trends, both-teams-to-score trends, clean sheets, and team-goal patterns.\n- Head-to-head history only where it is relevant and not misleading.\n- Tactical systems, playing styles, likely formations, and matchup advantages.\n- Injuries, suspensions, unavailable players, expected lineups, squad depth, rotation, and fixture congestion.\n- Referee identity and relevant disciplinary/penalty history when reliably available.\n- Motivation, title/relegation/qualification pressure, and competition context.\n- Weather and pitch conditions if materially relevant.\n- Current decimal odds, bookmaker/source, and the time odds were checked; note meaningful market movement if verifiable.\n\nUse current, credible sources. Give more weight to recent and relevant evidence than old head-to-head records. Do not infer unavailable facts. Distinguish verified facts from estimates and explicitly flag missing or uncertain information.\n\n## ALL SUITABLE BETTING MARKETS\nEvaluate all markets where reliable data exists, including match result, double chance, draw no bet, Asian handicap, total goals, team goals, both teams to score, first-half markets, corners, cards, and other relevant statistical markets. Choose the market with the strongest evidence-backed case, not simply the highest odds. Avoid volatile or poorly supported markets.\n\n## STRICT RISK FILTER\nReject candidates with stale or unverifiable odds, unclear fixture details, major unresolved lineup uncertainty, important missing team news, unreliable statistics, unstable tactical circumstances, excessive volatility, or weak evidence. Never invent fixtures, odds, injuries, referee details, statistics, sources, or probabilities. An estimated probability must be a reasoned estimate, not a guarantee.\n\n## ODDS OBJECTIVE\nThe preferred combined decimal odds are 2.00–2.30. The risk preference is the lowest credible risk. Prefer a small number of strong independent selections. Never add a weak selection just to reach 2.00. If the evidence does not support a credible combination at 2.00 or higher, return no qualifying slip rather than forcing one. Individual odds must be current and sourced.\n\n## OUTPUT FOR THE INDEPENDENT DECISION STAGE\nReturn valid JSON only. Do not create the final accumulator yourself. Return up to 40 researched candidate selections in this structure:\n{\n  \"date\": \"{{NIGERIA_DATE}}\",\n  \"research_summary\": \"Concise summary of the fixtures researched and important findings.\",\n  \"candidates\": [\n    {\n      \"match\": \"Home Team vs Away Team\",\n      \"competition\": \"Competition name\",\n      \"kickoff_nigeria_time\": \"ISO 8601 time with Nigeria offset or clearly stated Nigeria time\",\n      \"market\": \"Specific betting market\",\n      \"prediction\": \"Exact selection\",\n      \"decimal_odds\": 1.50,\n      \"estimated_probability\": 0.80,\n      \"supporting_evidence\": [\"Verified supporting evidence with relevant figures.\"],\n      \"potential_risks\": [\"Material uncertainty or reason this selection could fail.\"],\n      \"referee_notes\": \"Verified relevant referee information or state unavailable.\",\n      \"lineup_injury_notes\": \"Verified team news or state unavailable.\",\n      \"odds_source\": \"Bookmaker or odds source and time checked.\",\n      \"sources\": [{\"title\":\"Source title\",\"url\":\"https://example.com\",\"published\":\"Date if available\"}]\n    }\n  ],\n  \"research_limitations\": [\"Important unavailable or uncertain information.\"]\n}\n\nReturn an empty candidates array if no credible opportunities exist. Ensure odds are decimal numbers greater than 1.00 and all sources actually support the claims.\n\n## FINAL PRINCIPLES\nEvidence and safety come before quantity and odds. Do not describe any bet as certain, fixed, or guaranteed. The next stage will independently score and reject candidates. The application, not this research call, will calculate the final combined odds."
+  master: "# MASTER PROMPT — DAILY FOOTBALL RESEARCH & LOW-RISK BETTING SELECTIONS\n\n## ROLE AND OBJECTIVE\nAct as an advanced football research and betting analysis system. Research today's football fixtures and identify the strongest evidence-backed betting opportunities. The highest priority is reducing risk, verifying information, and avoiding weak selections. Do not chase odds or force a bet.\n\n## DATE AND FIXTURES\nUse today's actual date in Nigeria (Africa/Lagos time): {{NIGERIA_DATE}}.\nResearch professional football matches scheduled to take place on that Nigerian calendar date. Check kickoff times and time zones carefully. Exclude completed, postponed, cancelled, or incorrectly dated fixtures. Consider relevant leagues and competitions worldwide, not only the most popular leagues.\n\n## DEEP RESEARCH FOR EACH POTENTIAL MATCH\nInvestigate:\n- Recent form over the last 5–10 matches, with appropriate weighting for opponent strength.\n- League position, points, season performance, and the importance of the fixture.\n- Home and away performance.\n- Goals scored and conceded, including first-half and second-half patterns.\n- Over/under trends, both-teams-to-score trends, clean sheets, and team-goal patterns.\n- Head-to-head history only where it is relevant and not misleading.\n- Tactical systems, playing styles, likely formations, and matchup advantages.\n- Injuries, suspensions, unavailable players, expected lineups, squad depth, rotation, and fixture congestion.\n- Referee identity and relevant disciplinary/penalty history when reliably available.\n- Motivation, title/relegation/qualification pressure, and competition context.\n- Weather and pitch conditions if materially relevant.\n- Current decimal odds, bookmaker/source, and the time odds were checked; note meaningful market movement if verifiable.\n\nUse current, credible sources where you can genuinely verify them. This free chat endpoint does not provide a browser-search tool. Never pretend you browsed or invent URLs, odds, injuries, referee records, or current facts. If current information cannot be verified, return an empty candidates array and explain the limitation. Give more weight to recent and relevant evidence than old head-to-head records. Do not infer unavailable facts. Distinguish verified facts from estimates and explicitly flag missing or uncertain information.\n\n## ALL SUITABLE BETTING MARKETS\nEvaluate all markets where reliable data exists, including match result, double chance, draw no bet, Asian handicap, total goals, team goals, both teams to score, first-half markets, corners, cards, and other relevant statistical markets. Choose the market with the strongest evidence-backed case, not simply the highest odds. Avoid volatile or poorly supported markets.\n\n## STRICT RISK FILTER\nReject candidates with stale or unverifiable odds, unclear fixture details, major unresolved lineup uncertainty, important missing team news, unreliable statistics, unstable tactical circumstances, excessive volatility, or weak evidence. Never invent fixtures, odds, injuries, referee details, statistics, sources, or probabilities. An estimated probability must be a reasoned estimate, not a guarantee.\n\n## ODDS OBJECTIVE\nThe preferred combined decimal odds are 2.00–2.30. The risk preference is the lowest credible risk. Prefer a small number of strong independent selections. Never add a weak selection just to reach 2.00. If the evidence does not support a credible combination at 2.00 or higher, return no qualifying slip rather than forcing one. Individual odds must be current and sourced.\n\n## OUTPUT FOR THE INDEPENDENT DECISION STAGE\nReturn valid JSON only. Do not create the final accumulator yourself. Return up to 40 researched candidate selections in this structure:\n{\n  \"date\": \"{{NIGERIA_DATE}}\",\n  \"research_summary\": \"Concise summary of the fixtures researched and important findings.\",\n  \"candidates\": [\n    {\n      \"match\": \"Home Team vs Away Team\",\n      \"competition\": \"Competition name\",\n      \"kickoff_nigeria_time\": \"ISO 8601 time with Nigeria offset or clearly stated Nigeria time\",\n      \"market\": \"Specific betting market\",\n      \"prediction\": \"Exact selection\",\n      \"decimal_odds\": 1.50,\n      \"estimated_probability\": 0.80,\n      \"supporting_evidence\": [\"Verified supporting evidence with relevant figures.\"],\n      \"potential_risks\": [\"Material uncertainty or reason this selection could fail.\"],\n      \"referee_notes\": \"Verified relevant referee information or state unavailable.\",\n      \"lineup_injury_notes\": \"Verified team news or state unavailable.\",\n      \"odds_source\": \"Bookmaker or odds source and time checked.\",\n      \"sources\": [{\"title\":\"Source title\",\"url\":\"https://example.com\",\"published\":\"Date if available\"}]\n    }\n  ],\n  \"research_limitations\": [\"Important unavailable or uncertain information.\"]\n}\n\nReturn an empty candidates array if no credible opportunities exist. Ensure odds are decimal numbers greater than 1.00 and all sources actually support the claims.\n\n## FINAL PRINCIPLES\nEvidence and safety come before quantity and odds. Do not describe any bet as certain, fixed, or guaranteed. The next stage will independently score and reject candidates. The application, not this research call, will calculate the final combined odds."
 };
 
 function json(data: unknown, status=200, headers: Record<string,string>={}) {
@@ -36,57 +36,46 @@ function clearCookie() {
   return `${COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
 }
 async function body(req:Request) { return await req.json().catch(()=>({})); }
-async function openAIResponse(input:string, useBrowserSearch:boolean) {
-  const key=secret("OPENAI_API_KEY");
-  const payload:any={
-    model:"gpt-5.4-mini",
-    input,
-    reasoning:{effort:"low"}
-  };
-  if(useBrowserSearch) {
-    payload.tools=[{type:"web_search"}];
-    payload.tool_choice="required";
-  }
-  const response=await fetch("https://api.openai.com/v1/responses",{
+async function kiloChatCompletion(messages:any[], stage:string) {
+  const response=await fetch("https://ai-gateway.kilo.ai/api/v1/chat/completions",{
     method:"POST",
-    headers:{"content-type":"application/json","authorization":`Bearer ${key}`},
-    body:JSON.stringify(payload)
+    headers:{"content-type":"application/json"},
+    body:JSON.stringify({
+      model:"kilo-auto/free",
+      messages,
+      temperature:0.2,
+      max_tokens:12000
+    })
   });
-  const data=await response.json();
+  const data=await response.json().catch(()=>({}));
   if(!response.ok) {
-    const detail=data?.error?.message || `OpenAI request failed (${response.status})`;
-    throw new Error(`OpenAI ${useBrowserSearch?"research":"decision"} stage: ${detail}`);
+    const detail=data?.error?.message || data?.message || `Kilo request failed (${response.status})`;
+    throw new Error(`Kilo ${stage} stage: ${detail}`);
   }
-  const outputText=Array.isArray(data?.output)
-    ? data.output.filter((item:any)=>item?.type==="message")
-        .flatMap((item:any)=>Array.isArray(item?.content)?item.content:[])
-        .filter((item:any)=>item?.type==="output_text")
-        .map((item:any)=>item.text||"").join("\n")
-    : "";
-  const text=outputText || data?.output_text || "";
-  if(!text) throw new Error("OpenAI returned an empty response.");
+  const text=data?.choices?.[0]?.message?.content;
+  if(typeof text!=="string" || !text.trim()) throw new Error("Kilo returned an empty response.");
   return text;
 }
 function parseModelJson(text:string, stage:string) {
   const cleaned=text.replace(/^```json\s*/i,"").replace(/\s*```$/,"").trim();
   const first=cleaned.indexOf("{");
   const last=cleaned.lastIndexOf("}");
-  if(first<0||last<=first) throw new Error(`OpenAI ${stage} stage returned no valid JSON object.`);
+  if(first<0||last<=first) throw new Error(`Kilo ${stage} stage returned no valid JSON object.`);
   try { return JSON.parse(cleaned.slice(first,last+1)); }
-  catch { throw new Error(`OpenAI ${stage} stage returned invalid JSON. Please run the workflow again.`); }
+  catch { throw new Error(`Kilo ${stage} stage returned invalid JSON. Please run the workflow again.`); }
 }
-async function runOpenAIResearch(prompt:string, input:string) {
-  const instructions=prompt+"\n\nIMPORTANT OUTPUT RULE: Return only one valid JSON object matching the requested schema. Do not wrap it in Markdown fences. Use browser search to verify current fixtures, team news, referees, statistics and odds. Cite actual source URLs in the JSON.";
-  const text=await openAIResponse(instructions+"\n\nINPUT DATA:\n"+input,true);
+async function runKiloResearch(prompt:string, input:string) {
+  const instructions=prompt+"\n\nIMPORTANT OUTPUT RULE: Return only one valid JSON object matching the requested schema. Do not wrap it in Markdown fences. This endpoint does not provide browser search. Do not claim to have searched the web. Do not invent source URLs, odds, fixtures or current team news. If the supplied information is insufficient to verify a candidate, omit it.";
+  const text=await kiloChatCompletion([{role:"system",content:instructions},{role:"user",content:"INPUT DATA:\n"+input}],"research");
   return parseModelJson(text,"research");
 }
-async function runOpenAIDecision(input:string) {
+async function runKiloDecision(input:string) {
   const instructions=`You are the independent final risk reviewer for a football-picks workflow. Evaluate EVERY candidate in the supplied input. Do not conduct new fixture research and do not assume missing facts are true. Score evidence quality and conservative accumulator suitability. Reject stale or unverified odds, weak evidence, unclear fixtures, major lineup uncertainty, volatile markets, and unsupported probability claims. Do not select based on odds alone. Return one result for each candidate, preserving its zero-based index. Use conservative estimates. A score of 3 or 4 requires strong current evidence. Safety probability means your estimated probability that the selection itself wins, not a guarantee. Confidence measures how well the evidence supports your assessment.
 Return valid JSON only in this shape: { "reviews": [ { "index": 0, "score": 0, "confidence": 0.0, "safety_probability": 0.0, "safety_confidence": 0.0, "reason": "short explanation" } ] }
 Score must be 0 to 4. All probability/confidence values must be between 0 and 1. Include every candidate exactly once.`;
-  const text=await openAIResponse(instructions+"\n\nCANDIDATES TO REVIEW:\n"+input,false);
+  const text=await kiloChatCompletion([{role:"system",content:instructions},{role:"user",content:"CANDIDATES TO REVIEW:\n"+input}],"decision");
   const parsed=parseModelJson(text,"decision");
-  if(!Array.isArray(parsed?.reviews)) throw new Error("OpenAI decision stage returned no candidate reviews.");
+  if(!Array.isArray(parsed?.reviews)) throw new Error("Kilo decision stage returned no candidate reviews.");
   return parsed.reviews as any[];
 }
 function nigeriaToday() {
@@ -125,7 +114,7 @@ function buildSlip(candidates:any[], answers:any[], date:string): Record<string,
     confidence_note:"No combination met the strict evidence and risk thresholds while reaching the 2.00–2.30 target. No bet is recommended.",
     research_notes:["The system did not force weak selections to reach the odds target."],
     recommendation:"NO BET",
-    decision_summary:{candidates_received:candidates.length,candidates_accepted:scored.length,model:"gpt-5.4-mini"}
+    decision_summary:{candidates_received:candidates.length,candidates_accepted:scored.length,model:"kilo-auto/free"}
   };
   const selections=best.map(x=>({
     match:x.candidate.match,
@@ -144,9 +133,9 @@ function buildSlip(candidates:any[], answers:any[], date:string): Record<string,
   return {
     date,title:"Daily Football Picks",selections,combined_odds:Number(combined.toFixed(2)),
     confidence_note:"Selections passed the configured evidence and risk filters. No betting outcome is guaranteed; confirm odds and lineups before placing any bet.",
-    research_notes:["Research and candidate generation: one OpenAI Responses API request with web search.","Independent candidate scoring: one OpenAI Responses API request.","Final slip assembly and combined-odds calculation: application code."],
+    research_notes:["Research and candidate generation: one Kilo Responses API request with web search.","Independent candidate scoring: one Kilo Responses API request.","Final slip assembly and combined-odds calculation: application code."],
     recommendation:"BET WITH CAUTION",
-    decision_summary:{candidates_received:candidates.length,candidates_accepted:scored.length,selected:selections.length,model:"gpt-5.4-mini"}
+    decision_summary:{candidates_received:candidates.length,candidates_accepted:scored.length,selected:selections.length,model:"kilo-auto/free"}
   };
 }
 
@@ -207,22 +196,22 @@ export default async (req:Request) => {
         const rows=await db.sql<{prompt_key:string,prompt_text:string}>`SELECT prompt_key,prompt_text FROM prompts WHERE prompt_key='master' LIMIT 1`;
         const master=rows[0]?.prompt_text || defaults.master;
         const date=nigeriaToday();
-        console.info("[daily-football-picks] OpenAI research request started");
-        const research=await runOpenAIResearch(master.replaceAll("{{NIGERIA_DATE}}",date),`Today's date in Nigeria (Africa/Lagos): ${date}. Research today's fixtures and return the required candidate JSON.`);
+        console.info("[daily-football-picks] Kilo research request started");
+        const research=await runKiloResearch(master.replaceAll("{{NIGERIA_DATE}}",date),`Today's date in Nigeria (Africa/Lagos): ${date}. Research today's fixtures and return the required candidate JSON.`);
         const candidates=Array.isArray(research?.candidates)?research.candidates.slice(0,40):[];
         if(!candidates.length) {
           const noBet={date,title:"Daily Football Picks",selections:[],combined_odds:null,confidence_note:"No credible candidate selections were returned by the research stage. No bet is recommended.",recommendation:"NO BET",research_notes:research?.research_limitations||[]};
           await db.sql`INSERT INTO daily_picks(pick_date,payload,status) VALUES (${date},${JSON.stringify(noBet)}::jsonb,'published') ON CONFLICT(pick_date) DO UPDATE SET payload=EXCLUDED.payload,status='published',created_at=NOW()`;
-          return json({ok:true,pick:noBet,model_requests:1,request_breakdown:{openai_research:1,openai_decision:0}});
+          return json({ok:true,pick:noBet,model_requests:1,request_breakdown:{kilo_research:1,kilo_decision:0}});
         }
-        console.info("[daily-football-picks] OpenAI decision request started", {candidate_count:candidates.length});
-        const answers=await runOpenAIDecision(JSON.stringify({date,research_summary:research.research_summary,candidates}));
+        console.info("[daily-football-picks] Kilo decision request started", {candidate_count:candidates.length});
+        const answers=await runKiloDecision(JSON.stringify({date,research_summary:research.research_summary,candidates}));
         const final=buildSlip(candidates,answers,date);
         final.research_summary=research.research_summary||"";
         final.research_limitations=research.research_limitations||[];
         await db.sql`INSERT INTO daily_picks(pick_date,payload,status) VALUES (${date},${JSON.stringify(final)}::jsonb,'published') ON CONFLICT(pick_date) DO UPDATE SET payload=EXCLUDED.payload,status='published',created_at=NOW()`;
-        console.info("[daily-football-picks] OpenAI workflow completed: 2 model requests maximum");
-        return json({ok:true,pick:final,model_requests:2,request_breakdown:{openai_research:1,openai_decision:1}});
+        console.info("[daily-football-picks] Kilo workflow completed: 2 model requests maximum");
+        return json({ok:true,pick:final,model_requests:2,request_breakdown:{kilo_research:1,kilo_decision:1}});
       }
     }
     return json({error:"Not found."},404);
