@@ -76,46 +76,53 @@ function clearCookie() {
   return `${COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
 }
 async function body(req:Request) { return await req.json().catch(()=>({})); }
-async function kiloChatCompletion(messages:any[], stage:string) {
-  const response=await fetch("https://ai-gateway.kilo.ai/api/v1/chat/completions",{
+async function geminiChatCompletion(messages:any[], stage:string) {
+  const key=Netlify.env.get("GEMINI_API_KEY");
+  if(!key) throw new Error("GEMINI_API_KEY is missing from Netlify environment variables.");
+  const model=Netlify.env.get("GEMINI_MODEL") || "gemini-2.5-flash";
+  const systemText=messages.filter((m:any)=>m.role==="system").map((m:any)=>String(m.content||"")).join("\n\n");
+  const contents=messages.filter((m:any)=>m.role!=="system").map((m:any)=>({
+    role:m.role==="assistant"?"model":"user",
+    parts:[{text:String(m.content||"")}]
+  }));
+  const response=await fetch("https://generativelanguage.googleapis.com/v1beta/models/"+encodeURIComponent(model)+":generateContent",{
     method:"POST",
-    headers:{"content-type":"application/json"},
+    headers:{"content-type":"application/json","x-goog-api-key":key},
     body:JSON.stringify({
-      model:"kilo-auto/free",
-      messages,
-      temperature:0.2,
-      max_tokens:12000
-    })
+      ...(systemText?{systemInstruction:{parts:[{text:systemText}]}}:{}),
+      contents,
+      generationConfig:{temperature:0.2,maxOutputTokens:8192,responseMimeType:"application/json"}
+    }),
+    signal:AbortSignal.timeout(25000)
   });
   const data=await response.json().catch(()=>({}));
   if(!response.ok) {
-    const detail=data?.error?.message || data?.message || `Kilo request failed (${response.status})`;
-    throw new Error(`Kilo ${stage} stage: ${detail}`);
+    const detail=data?.error?.message || data?.message || `HTTP ${response.status}`;
+    throw new Error(`Gemini ${stage} stage failed: ${detail}`);
   }
-  const text=data?.choices?.[0]?.message?.content;
-  if(typeof text!=="string" || !text.trim()) throw new Error("Kilo returned an empty response.");
+  const text=(data?.candidates?.[0]?.content?.parts||[]).map((p:any)=>p?.text||"").join("").trim();
+  if(!text) throw new Error("Gemini returned an empty response"+(data?.promptFeedback?.blockReason?": "+data.promptFeedback.blockReason:"."));
   return text;
 }
 function parseModelJson(text:string, stage:string) {
-  const cleaned=text.replace(/^```json\s*/i,"").replace(/\s*```$/,"").trim();
-  const first=cleaned.indexOf("{");
-  const last=cleaned.lastIndexOf("}");
-  if(first<0||last<=first) throw new Error(`Kilo ${stage} stage returned no valid JSON object.`);
+  const cleaned=text.replace(/^\`\`\`json\s*/i,"").replace(/\s*\`\`\`$/,"").trim();
+  const first=cleaned.indexOf("{"), last=cleaned.lastIndexOf("}");
+  if(first<0||last<=first) throw new Error(`Gemini ${stage} stage returned no valid JSON object.`);
   try { return JSON.parse(cleaned.slice(first,last+1)); }
-  catch { throw new Error(`Kilo ${stage} stage returned invalid JSON. Please run the workflow again.`); }
+  catch { throw new Error(`Gemini ${stage} stage returned invalid JSON. Please run the workflow again.`); }
 }
-async function runKiloResearch(prompt:string, input:string) {
+async function runGeminiResearch(prompt:string, input:string) {
   const instructions=prompt+"\n\nIMPORTANT OUTPUT RULE: Return only one valid JSON object matching the requested schema. Do not wrap it in Markdown fences. You are not browsing the web. The user message contains structured API-Football data. Only select exact fixture, bookmaker, market, selection and decimal_odds combinations present in that data. Never invent or adjust odds, fixtures, statistics, team news, injuries or source URLs. If evidence is insufficient, omit the candidate.";
-  const text=await kiloChatCompletion([{role:"system",content:instructions},{role:"user",content:"INPUT DATA:\n"+input}],"research");
+  const text=await geminiChatCompletion([{role:"system",content:instructions},{role:"user",content:"INPUT DATA:\n"+input}],"research");
   return parseModelJson(text,"research");
 }
-async function runKiloDecision(input:string) {
+async function runGeminiDecision(input:string) {
   const instructions=`You are the independent final risk reviewer for a football-picks workflow. Evaluate EVERY candidate in the supplied input. Do not conduct new fixture research and do not assume missing facts are true. Score evidence quality and conservative accumulator suitability. Reject stale or unverified odds, weak evidence, unclear fixtures, major lineup uncertainty, volatile markets, and unsupported probability claims. Do not select based on odds alone. Return one result for each candidate, preserving its zero-based index. Use conservative estimates. A score of 3 or 4 requires strong current evidence. Safety probability means your estimated probability that the selection itself wins, not a guarantee. Confidence measures how well the evidence supports your assessment.
 Return valid JSON only in this shape: { "reviews": [ { "index": 0, "score": 0, "confidence": 0.0, "safety_probability": 0.0, "safety_confidence": 0.0, "reason": "short explanation" } ] }
 Score must be 0 to 4. All probability/confidence values must be between 0 and 1. Include every candidate exactly once.`;
-  const text=await kiloChatCompletion([{role:"system",content:instructions},{role:"user",content:"CANDIDATES TO REVIEW:\n"+input}],"decision");
+  const text=await geminiChatCompletion([{role:"system",content:instructions},{role:"user",content:"CANDIDATES TO REVIEW:\n"+input}],"decision");
   const parsed=parseModelJson(text,"decision");
-  if(!Array.isArray(parsed?.reviews)) throw new Error("Kilo decision stage returned no candidate reviews.");
+  if(!Array.isArray(parsed?.reviews)) throw new Error("Gemini decision stage returned no candidate reviews.");
   return parsed.reviews as any[];
 }
 function nigeriaToday() {
@@ -154,7 +161,7 @@ function buildSlip(candidates:any[], answers:any[], date:string): Record<string,
     confidence_note:"No combination met the strict evidence and risk thresholds while reaching the 2.00–2.30 target. No bet is recommended.",
     research_notes:["The system did not force weak selections to reach the odds target."],
     recommendation:"NO BET",
-    decision_summary:{candidates_received:candidates.length,candidates_accepted:scored.length,model:"kilo-auto/free"}
+    decision_summary:{candidates_received:candidates.length,candidates_accepted:scored.length,model:"gemini-2.5-flash"}
   };
   const selections=best.map(x=>({
     match:x.candidate.match,
@@ -173,9 +180,9 @@ function buildSlip(candidates:any[], answers:any[], date:string): Record<string,
   return {
     date,title:"Daily Football Picks",selections,combined_odds:Number(combined.toFixed(2)),
     confidence_note:"Selections passed the configured evidence and risk filters. No betting outcome is guaranteed; confirm odds and lineups before placing any bet.",
-    research_notes:["Fixture and bookmaker odds data supplied by API-Football.","API-Football prediction enrichment supplied where available.","Kilo analysed only supplied provider data; unsupported selections were rejected by the application.","Independent candidate scoring: one Kilo API request.","Final slip assembly and combined-odds calculation: application code."],
+    research_notes:["Fixture and bookmaker odds data supplied by API-Football.","API-Football prediction enrichment supplied where available.","Gemini analysed only supplied provider data; unsupported selections were rejected by the application.","Independent candidate scoring: one Gemini API request.","Final slip assembly and combined-odds calculation: application code."],
     recommendation:"BET WITH CAUTION",
-    decision_summary:{candidates_received:candidates.length,candidates_accepted:scored.length,selected:selections.length,model:"kilo-auto/free"}
+    decision_summary:{candidates_received:candidates.length,candidates_accepted:scored.length,selected:selections.length,model:"gemini-2.5-flash"}
   };
 }
 
@@ -332,12 +339,12 @@ export default async (req:Request) => {
     }
     if(path.startsWith("admin/")) {
       if(!adminAllowed(req)) return json({error:"Admin key required."},401);
-      if(path==="admin/test-ai" && req.method==="POST") {
+      if(path==="admin/test-gemini" && req.method==="POST") {
         const {question}=await body(req);
         const prompt=String(question||"").trim();
         if(!prompt||prompt.length>4000) return json({error:"Enter a test question of up to 4,000 characters."},400);
-        const answer=await kiloChatCompletion([{role:"user",content:prompt}],"connection test");
-        return json({ok:true,answer,model:"kilo-auto/free"});
+        const answer=await geminiChatCompletion([{role:"user",content:prompt}],"connection test");
+        return json({ok:true,answer,model:Netlify.env.get("GEMINI_MODEL")||"gemini-2.5-flash"});
       }
       if(path==="admin/prompts" && req.method==="GET") {
         const rows=await db.sql<{prompt_key:string,prompt_text:string,updated_at:string}>`SELECT prompt_key,prompt_text,updated_at FROM prompts`;
@@ -362,7 +369,7 @@ export default async (req:Request) => {
         if(!footballData.fixtures.length || !footballData.oddsRecords.length) {
           const noBet={date,title:"Daily Football Picks",selections:[],combined_odds:null,confidence_note:"API-Football did not return upcoming fixtures with available bookmaker odds for today. No bet is recommended; no fixture or price was invented.",recommendation:"NO BET",research_notes:["Data source: API-Football.","Fixtures returned: "+footballData.fixtures.length,"Verified odds records: "+footballData.oddsRecords.length]};
           await db.sql`INSERT INTO daily_picks(pick_date,payload,status) VALUES (${date},${JSON.stringify(noBet)}::jsonb,'published') ON CONFLICT(pick_date) DO UPDATE SET payload=EXCLUDED.payload,status='published',created_at=NOW()`;
-          return json({ok:true,pick:noBet,model_requests:0,api_football_requests:footballData.apiRequests,api_football_remaining:footballData.remaining,request_breakdown:{api_football:footballData.apiRequests,kilo_research:0,kilo_decision:0}});
+          return json({ok:true,pick:noBet,model_requests:0,api_football_requests:footballData.apiRequests,api_football_remaining:footballData.remaining,request_breakdown:{api_football:footballData.apiRequests,gemini_research:0,gemini_decision:0}});
         }
         const researchInput={
           date,
@@ -372,23 +379,23 @@ export default async (req:Request) => {
           bookmaker_odds:footballData.oddsRecords,
           api_football_predictions:footballData.predictionData
         };
-        console.info("[daily-football-picks] Sending verified API-Football data to Kilo", {fixtures:footballData.fixtures.length,odds:footballData.oddsRecords.length});
-        const research=await runKiloResearch(master.replaceAll("{{NIGERIA_DATE}}",date),`Nigerian date: ${date}. Analyse only this API-Football data. Return candidates only when the exact fixture_id, bookmaker, market_name, selection and decimal_odds exist in bookmaker_odds. Never make up missing team information or odds.\n\nAPI-FOOTBALL DATA:\n${JSON.stringify(researchInput)}`);
+        console.info("[daily-football-picks] Sending verified API-Football data to Gemini", {fixtures:footballData.fixtures.length,odds:footballData.oddsRecords.length});
+        const research=await runGeminiResearch(master.replaceAll("{{NIGERIA_DATE}}",date),`Nigerian date: ${date}. Analyse only this API-Football data. Return candidates only when the exact fixture_id, bookmaker, market_name, selection and decimal_odds exist in bookmaker_odds. Never make up missing team information or odds.\n\nAPI-FOOTBALL DATA:\n${JSON.stringify(researchInput)}`);
         const proposed=Array.isArray(research?.candidates)?research.candidates:[];
         const candidates=validateApiCandidates(proposed,footballData);
         if(!candidates.length) {
           const noBet={date,title:"Daily Football Picks",selections:[],combined_odds:null,confidence_note:"No credible candidate selections were returned by the research stage. No bet is recommended.",recommendation:"NO BET",research_notes:research?.research_limitations||[]};
           await db.sql`INSERT INTO daily_picks(pick_date,payload,status) VALUES (${date},${JSON.stringify(noBet)}::jsonb,'published') ON CONFLICT(pick_date) DO UPDATE SET payload=EXCLUDED.payload,status='published',created_at=NOW()`;
-          return json({ok:true,pick:noBet,model_requests:1,api_football_requests:footballData.apiRequests,api_football_remaining:footballData.remaining,request_breakdown:{api_football:footballData.apiRequests,kilo_research:1,kilo_decision:0}});
+          return json({ok:true,pick:noBet,model_requests:1,api_football_requests:footballData.apiRequests,api_football_remaining:footballData.remaining,request_breakdown:{api_football:footballData.apiRequests,gemini_research:1,gemini_decision:0}});
         }
-        console.info("[daily-football-picks] Kilo decision request started", {candidate_count:candidates.length});
-        const answers=await runKiloDecision(JSON.stringify({date,research_summary:research.research_summary,candidates}));
+        console.info("[daily-football-picks] Gemini decision request started", {candidate_count:candidates.length});
+        const answers=await runGeminiDecision(JSON.stringify({date,research_summary:research.research_summary,candidates}));
         const final=buildSlip(candidates,answers,date);
         final.research_summary=research.research_summary||"";
         final.research_limitations=research.research_limitations||[];
         await db.sql`INSERT INTO daily_picks(pick_date,payload,status) VALUES (${date},${JSON.stringify(final)}::jsonb,'published') ON CONFLICT(pick_date) DO UPDATE SET payload=EXCLUDED.payload,status='published',created_at=NOW()`;
-        console.info("[daily-football-picks] Kilo workflow completed: 2 model requests maximum");
-        return json({ok:true,pick:final,model_requests:2,api_football_requests:footballData.apiRequests,api_football_remaining:footballData.remaining,request_breakdown:{api_football:footballData.apiRequests,kilo_research:1,kilo_decision:1}});
+        console.info("[daily-football-picks] Gemini workflow completed: 2 model requests maximum");
+        return json({ok:true,pick:final,model_requests:2,api_football_requests:footballData.apiRequests,api_football_remaining:footballData.remaining,request_breakdown:{api_football:footballData.apiRequests,gemini_research:1,gemini_decision:1}});
       }
     }
     return json({error:"Not found."},404);
