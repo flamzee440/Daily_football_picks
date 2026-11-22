@@ -60,7 +60,7 @@ async function runGemini(prompt:string, input:string) {
     : "";
   const text=outputText || data?.output_text || "";
   if(!text) throw new Error("Gemini returned an empty response.");
-  const cleaned=text.replace(/^\`\`\`json\\s*/i,"").replace(/\\s*\`\`\`$/,"").trim();
+  const cleaned=text.replace(/^```json\s*/i,"").replace(/\s*```$/,"").trim();
   return JSON.parse(cleaned);
 }
 function adminAllowed(req:Request) {
